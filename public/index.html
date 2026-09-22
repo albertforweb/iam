@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IAM Console</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="console-body is-loading">
+  <section id="authView" class="spa-auth-view" hidden>
+    <main class="wrap">
+      <div class="card auth-panel" data-auth-screen-panel="login">
+        <div class="auth-lockup"><div class="brand-mark">I</div><strong>IAM</strong></div>
+        <h2>Sign in</h2>
+        <p class="subtitle">Access your IAM account</p>
+        <form id="loginForm" novalidate>
+          <label for="loginUsername">Username</label>
+          <input id="loginUsername" name="username" type="text" autocomplete="username" required>
+          <label for="loginPassword">Password</label>
+          <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+          <button id="loginSubmitBtn" type="submit">Sign in</button>
+        </form>
+        <div id="loginMessage" class="msg"></div>
+        <div class="links">
+          <a href="#signup" data-auth-screen="signup">Create an account</a>
+          <a href="#forgot" data-auth-screen="forgot">Forgot username or password?</a>
+        </div>
+      </div>
+
+      <div class="card auth-panel" data-auth-screen-panel="signup" hidden>
+        <div class="auth-lockup"><div class="brand-mark">I</div><strong>IAM</strong></div>
+        <h2>Create account</h2>
+        <p class="subtitle">Register for an IAM account</p>
+        <form id="signupForm" novalidate>
+          <label for="signupUsername">Username</label>
+          <input id="signupUsername" name="username" type="text" autocomplete="username" required>
+          <label for="signupDisplayName">Display name</label>
+          <input id="signupDisplayName" name="displayName" type="text" autocomplete="name" required>
+          <label for="signupEmail">Email <span class="field-hint">(optional)</span></label>
+          <input id="signupEmail" name="email" type="email" autocomplete="email">
+          <label for="signupPassword">Password <span class="field-hint">(min 8 chars)</span></label>
+          <input id="signupPassword" name="password" type="password" autocomplete="new-password" minlength="8" required>
+          <label for="signupConfirm">Confirm password</label>
+          <input id="signupConfirm" name="confirm" type="password" autocomplete="new-password" minlength="8" required>
+          <button id="signupSubmitBtn" type="submit">Create account</button>
+        </form>
+        <div id="signupMessage" class="msg"></div>
+        <div class="links"><a href="#login" data-auth-screen="login">Already have an account? Sign in</a></div>
+      </div>
+
+      <div class="card auth-panel" data-auth-screen-panel="forgot" hidden>
+        <div class="auth-lockup"><div class="brand-mark">I</div><strong>IAM</strong></div>
+        <h2>Account recovery</h2>
+        <p class="subtitle">Recover your username or reset your password</p>
+        <label for="recoveryMode">What do you need?</label>
+        <select id="recoveryMode" class="spa-select">
+          <option value="reset">I forgot my password</option>
+          <option value="username">I forgot my username</option>
+        </select>
+        <form id="forgotForm" novalidate>
+          <label id="recoveryFieldLabel" for="recoveryField">Username</label>
+          <input id="recoveryField" name="field" type="text" autocomplete="off" required>
+          <button id="forgotSubmitBtn" type="submit">Continue</button>
+        </form>
+        <div id="forgotMessage" class="msg"></div>
+        <div class="links"><a href="#login" data-auth-screen="login">Back to sign in</a></div>
+      </div>
+
+      <div class="card auth-panel" data-auth-screen-panel="reset" hidden>
+        <div class="auth-lockup"><div class="brand-mark">I</div><strong>IAM</strong></div>
+        <h2>Reset password</h2>
+        <p class="subtitle">Set a new password with your reset token</p>
+        <form id="resetForm" novalidate>
+          <label for="resetUsername">Username</label>
+          <input id="resetUsername" name="username" type="text" autocomplete="username" required>
+          <label for="resetToken">Reset token</label>
+          <input id="resetToken" name="token" type="text" autocomplete="off" required>
+          <label for="resetPassword">New password <span class="field-hint">(min 8 chars)</span></label>
+          <input id="resetPassword" name="newPassword" type="password" autocomplete="new-password" minlength="8" required>
+          <label for="resetConfirm">Confirm new password</label>
+          <input id="resetConfirm" name="confirm" type="password" autocomplete="new-password" minlength="8" required>
+          <button id="resetSubmitBtn" type="submit">Reset password</button>
+        </form>
+        <div id="resetMessage" class="msg"></div>
+        <div class="links">
+          <a href="#forgot" data-auth-screen="forgot">Request a new token</a>
+          <a href="#login" data-auth-screen="login">Back to sign in</a>
+        </div>
+      </div>
+    </main>
+  </section>
+
+  <div id="consoleShell" class="console-shell" hidden>
+    <aside class="console-sidebar">
+      <a class="console-brand" href="index.html">
+        <span class="brand-mark">I</span>
+        <span><strong>IAM</strong><small>Control plane</small></span>
+      </a>
+      <div id="adminNavLabel" class="console-nav-label">Workspace</div>
+      <nav id="adminNavigation" class="console-nav" aria-label="Console navigation">
+        <button class="console-nav-item active" data-view="overview"><span>⌂</span> Overview</button>
+        <button class="console-nav-item" data-view="users"><span>◉</span> Users</button>
+        <button class="console-nav-item" data-view="applications"><span>▣</span> Applications</button>
+        <button class="console-nav-item" data-view="authorization"><span>◇</span> Scopes &amp; roles</button>
+        <button class="console-nav-item" data-view="oauth"><span>⌁</span> OAuth clients</button>
+        <button class="console-nav-item" data-view="delegations"><span>⇄</span> Delegations</button>
+        <button class="console-nav-item" data-view="audit"><span>≡</span> Audit log</button>
+      </nav>
+      <div id="accountNavLabel" class="console-nav-label account-nav-label">Account</div>
+      <nav id="accountNavigation" class="console-nav account-nav" aria-label="Account navigation">
+        <button class="console-nav-item" data-view="profile"><span>◉</span> Profile</button>
+        <button class="console-nav-item" data-view="password"><span>◆</span> Password</button>
+      </nav>
+      <div class="console-sidebar-footer">
+        <a href="#profile" data-action="open-profile" class="console-user-link">
+          <span id="sidebarAvatar" class="console-avatar">?</span>
+          <span><strong id="sidebarName">Loading…</strong><small id="sidebarRole">Administrator</small></span>
+        </a>
+        <button id="signoutBtn" class="console-signout">Sign out</button>
+      </div>
+    </aside>
+
+    <main class="console-main">
+      <header class="console-topbar">
+        <div>
+          <p class="eyebrow">Identity administration</p>
+          <h1 id="pageTitle">Overview</h1>
+        </div>
+        <div id="adminTopbarActions" class="console-topbar-actions">
+          <label class="console-search"><span>⌕</span><input id="globalSearch" type="search" placeholder="Search users and applications" aria-label="Search"></label>
+          <button id="refreshBtn" class="console-icon-button" title="Refresh data" aria-label="Refresh data">↻</button>
+        </div>
+      </header>
+      <div id="toast" class="console-toast" role="status" aria-live="polite"></div>
+
+      <section class="console-view active" data-view-panel="overview">
+        <div class="console-hero">
+          <div><span class="console-kicker">SECURE IDENTITY OPERATIONS</span><h2>One place to manage access.</h2><p>Operate users, applications, permissions, OAuth clients, and delegated trust from one auditable control plane.</p></div>
+          <button class="console-primary" data-action="open-app-create">Register application <span>＋</span></button>
+        </div>
+        <div class="metric-grid">
+          <article class="metric-card"><span class="metric-icon violet">◉</span><div><span class="metric-label">Total users</span><strong id="metricUsers">—</strong><small id="metricUsersMeta">Loading directory</small></div></article>
+          <article class="metric-card"><span class="metric-icon blue">▣</span><div><span class="metric-label">Applications</span><strong id="metricApps">—</strong><small id="metricAppsMeta">Registered clients</small></div></article>
+          <article class="metric-card"><span class="metric-icon teal">◇</span><div><span class="metric-label">Permission scopes</span><strong id="metricScopes">—</strong><small id="metricScopesMeta">Across all apps</small></div></article>
+          <article class="metric-card"><span class="metric-icon amber">⚡</span><div><span class="metric-label">Active admins</span><strong id="metricAdmins">—</strong><small>System administrators</small></div></article>
+        </div>
+        <div class="console-two-column">
+          <article class="console-panel"><div class="panel-heading"><div><span class="console-kicker">DIRECTORY</span><h3>Recently added users</h3></div><button class="console-text-button" data-view-target="users">View all</button></div><div id="overviewUsers" class="compact-list"></div></article>
+          <article class="console-panel"><div class="panel-heading"><div><span class="console-kicker">ACTIVITY</span><h3>Recent security events</h3></div><button class="console-text-button" data-view-target="audit">View log</button></div><div id="overviewAudit" class="compact-list"></div></article>
+        </div>
+      </section>
+
+      <section class="console-view" data-view-panel="users">
+        <div class="section-heading"><div><span class="console-kicker">DIRECTORY</span><h2>User management</h2><p>Manage identity records and system administrator access.</p></div><button class="console-primary" data-action="open-user-create">＋ New user</button></div>
+        <div class="console-toolbar"><label class="toolbar-search"><span>⌕</span><input id="userSearch" type="search" placeholder="Search by name, username, or email"></label><select id="userStatusFilter"><option value="">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option><option value="suspended">Suspended</option></select></div>
+        <article class="console-panel table-panel"><div class="table-wrap"><table><thead><tr><th>User</th><th>Status</th><th>System roles</th><th>Created</th><th class="align-right">Actions</th></tr></thead><tbody id="usersTable"></tbody></table></div></article>
+      </section>
+
+      <section class="console-view" data-view-panel="applications">
+        <div class="section-heading"><div><span class="console-kicker">TENANT REGISTRY</span><h2>Applications</h2><p>Register relying parties and resource servers that trust IAM.</p></div><button class="console-primary" data-action="open-app-create">＋ Register app</button></div>
+        <article class="console-panel table-panel"><div class="table-wrap"><table><thead><tr><th>Application</th><th>Type</th><th>OAuth grants</th><th>Scopes</th><th>Status</th><th class="align-right">Actions</th></tr></thead><tbody id="applicationsTable"></tbody></table></div></article>
+      </section>
+
+      <section class="console-view" data-view-panel="authorization">
+        <div class="section-heading"><div><span class="console-kicker">APPLICATION AUTHORIZATION</span><h2>Scopes &amp; roles</h2><p>Define the permissions and role bundles owned by each application.</p></div><select id="authorizationAppSelect" class="app-select"></select></div>
+        <div class="console-two-column auth-columns">
+          <article class="console-panel"><div class="panel-heading"><div><span class="console-kicker">SCOPES</span><h3>Permission scopes</h3></div><button class="console-small-button" data-action="open-permission-create">＋ Add scope</button></div><div id="permissionsList" class="stack-list"></div></article>
+          <article class="console-panel"><div class="panel-heading"><div><span class="console-kicker">ROLE BUNDLES</span><h3>Application roles</h3></div><button class="console-small-button" data-action="open-role-create">＋ Add role</button></div><div id="rolesList" class="stack-list"></div><div id="roleEditor" class="role-editor" hidden></div></article>
+        </div>
+      </section>
+
+      <section class="console-view" data-view-panel="oauth">
+        <div class="section-heading"><div><span class="console-kicker">OAUTH 2.0 / OIDC</span><h2>OAuth clients</h2><p>Review client credentials, redirect trust, grants, and audience scopes.</p></div><button class="console-primary" data-action="open-app-create">＋ New OAuth client</button></div>
+        <article class="console-panel table-panel"><div class="table-wrap"><table><thead><tr><th>Client</th><th>Authentication</th><th>Redirect URIs</th><th>Allowed scopes</th><th>Token exchange</th><th class="align-right">Actions</th></tr></thead><tbody id="oauthTable"></tbody></table></div></article>
+        <div class="security-note"><span>◈</span><div><strong>Credential safety</strong><p>Client secrets are shown only when created or rotated. Store them in a secret manager and never expose them to browser code or source control.</p></div></div>
+      </section>
+
+      <section class="console-view" data-view-panel="delegations">
+        <div class="section-heading"><div><span class="console-kicker">TRUST POLICIES</span><h2>Delegated access</h2><p>Control which applications may exchange a user token for another API audience.</p></div></div>
+        <article class="console-panel delegation-form-panel"><div class="panel-heading"><div><span class="console-kicker">NEW POLICY</span><h3>Allow on-behalf-of access</h3></div></div><form id="delegationForm" class="inline-form"><label>Source application<select id="delegationSource" required></select></label><label>Target API<select id="delegationTarget" required></select></label><div id="delegationScopes" class="scope-picker"><span class="empty-state">Select a target API to view its scopes.</span></div><button class="console-primary" type="submit">Create policy</button></form></article>
+        <article class="console-panel table-panel"><div class="panel-heading"><div><span class="console-kicker">CURRENT POLICIES</span><h3>Application trust relationships</h3></div></div><div class="table-wrap"><table><thead><tr><th>Source</th><th>Target audience</th><th>Allowed scopes</th><th>Updated</th><th class="align-right">Actions</th></tr></thead><tbody id="delegationsTable"></tbody></table></div></article>
+      </section>
+
+      <section class="console-view" data-view-panel="audit">
+        <div class="section-heading"><div><span class="console-kicker">AUDIT TRAIL</span><h2>Security events</h2><p>Review authentication, configuration, and authorization changes.</p></div></div>
+        <article class="console-panel table-panel"><div class="table-wrap"><table><thead><tr><th>Event</th><th>Actor / subject</th><th>Application</th><th>Result</th><th>Timestamp</th></tr></thead><tbody id="auditTable"></tbody></table></div></article>
+      </section>
+
+      <section class="console-view" data-view-panel="profile">
+        <div class="section-heading"><div><span class="console-kicker">YOUR ACCOUNT</span><h2>Your profile</h2><p id="profileSubtitle">Account details</p></div></div>
+        <article class="console-panel member-profile-panel">
+          <div class="profile-head">
+            <div id="profileAvatar" class="avatar">?</div>
+            <div><h3 id="profileDisplayName">-</h3><p id="profileUsername" class="handle">@-</p></div>
+          </div>
+          <dl class="info">
+            <dt>Email</dt><dd id="profileEmail">-</dd>
+            <dt>Status</dt><dd id="profileStatus">-</dd>
+            <dt>Created</dt><dd id="profileCreatedAt">-</dd>
+          </dl>
+          <div class="roles"><p>Roles</p><div id="profileRoles"></div></div>
+        </article>
+      </section>
+
+      <section class="console-view" data-view-panel="password">
+        <div class="section-heading"><div><span class="console-kicker">SECURITY</span><h2>Change password</h2><p>Verify your current password to update it.</p></div></div>
+        <article class="console-panel member-password-panel">
+          <form id="changePasswordForm" novalidate>
+            <label for="currentPassword">Current password</label>
+            <input id="currentPassword" name="currentPassword" type="password" autocomplete="current-password" required>
+            <label for="newPassword">New password <span class="field-hint">(min 8 chars)</span></label>
+            <input id="newPassword" name="newPassword" type="password" autocomplete="new-password" minlength="8" required>
+            <label for="confirmPassword">Confirm new password</label>
+            <input id="confirmPassword" name="confirm" type="password" autocomplete="new-password" minlength="8" required>
+            <button id="changePasswordBtn" class="console-primary member-submit" type="submit">Update password</button>
+          </form>
+          <div id="passwordMessage" class="msg"></div>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="appDialog" class="console-dialog"><form id="appForm" method="dialog"><div class="dialog-heading"><div><span class="console-kicker">APPLICATION REGISTRY</span><h2 id="appDialogTitle">Register application</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div><input type="hidden" id="appEditId"><label>Client ID<input id="appClientId" required pattern="[A-Za-z0-9._-]{1,64}"></label><label>Display name<input id="appName" required maxlength="100"></label><label>Description<textarea id="appDescription" rows="2"></textarea></label><div class="form-grid"><label>Client type<select id="appClientType"><option value="confidential">Confidential</option><option value="service">Service</option><option value="public">Public</option></select></label><label>Enabled<select id="appEnabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></label></div><label>Grant types<input id="appGrantTypes" placeholder="authorization_code, refresh_token"></label><label>Redirect URIs<textarea id="appRedirectUris" rows="2" placeholder="One URL per line"></textarea></label><label>Allowed scopes<input id="appAllowedScopes" placeholder="scope:read, scope:write"></label><div id="appFormMessage" class="form-message"></div><div class="dialog-actions"><button type="button" class="console-secondary" data-action="close-dialog">Cancel</button><button class="console-primary" type="submit">Save application</button></div></form></dialog>
+
+  <dialog id="userDialog" class="console-dialog"><form id="userForm" method="dialog"><div class="dialog-heading"><div><span class="console-kicker">DIRECTORY</span><h2 id="userDialogTitle">Create user</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div><input type="hidden" id="userEditId"><label>Username<input id="userUsername" required pattern="[^\s].*"></label><label>Display name<input id="userDisplayName" required maxlength="120"></label><label>Email<input id="userEmail" type="email"></label><div class="form-grid"><label>Status<select id="userStatus"><option value="active">Active</option><option value="inactive">Inactive</option><option value="suspended">Suspended</option></select></label><label>Temporary password<input id="userPassword" type="password" minlength="8" autocomplete="new-password"></label></div><fieldset><legend>System roles</legend><div id="userRoles" class="check-grid"></div></fieldset><div id="userFormMessage" class="form-message"></div><div class="dialog-actions"><button type="button" class="console-secondary" data-action="close-dialog">Cancel</button><button class="console-primary" type="submit">Save user</button></div></form></dialog>
+
+  <dialog id="permissionDialog" class="console-dialog compact-dialog"><form id="permissionForm" method="dialog"><div class="dialog-heading"><div><span class="console-kicker">APPLICATION SCOPE</span><h2>Add permission scope</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div><label>Name<input id="permissionName" required pattern="[A-Za-z0-9_:.-]{1,80}" placeholder="blogs:post:create"></label><label>Description<textarea id="permissionDescription" rows="2"></textarea></label><div id="permissionFormMessage" class="form-message"></div><div class="dialog-actions"><button type="button" class="console-secondary" data-action="close-dialog">Cancel</button><button class="console-primary" type="submit">Add scope</button></div></form></dialog>
+
+  <dialog id="roleDialog" class="console-dialog compact-dialog"><form id="roleForm" method="dialog"><div class="dialog-heading"><div><span class="console-kicker">APPLICATION ROLE</span><h2>Add role bundle</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div><label>Name<input id="roleName" required pattern="[A-Za-z0-9_-]{1,50}" placeholder="editor"></label><label>Description<textarea id="roleDescription" rows="2"></textarea></label><div id="roleFormMessage" class="form-message"></div><div class="dialog-actions"><button type="button" class="console-secondary" data-action="close-dialog">Cancel</button><button class="console-primary" type="submit">Add role</button></div></form></dialog>
+
+  <div id="credentialDialog" class="credential-overlay" hidden><div class="credential-card"><span class="console-kicker">ONE-TIME CREDENTIAL</span><h2>Save this client secret</h2><p>For security, IAM will not display this secret again.</p><code id="credentialValue"></code><button id="copyCredential" class="console-secondary">Copy secret</button><button class="console-primary" data-action="close-credential">Done</button></div></div>
+  <script src="app.js"></script><script src="console.js"></script>
+</body>
+</html>

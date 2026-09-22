@@ -1,0 +1,318 @@
+openapi: 3.0.3
+info:
+  title: IAM Integration API
+  version: 1.0.0
+  description: >-
+    Identity, OAuth/OIDC, and application-scoped authorization APIs. Roles and
+    permissions are meaningful only within their owning application and context.
+servers:
+  - url: http://localhost:3000
+tags:
+  - name: OIDC
+  - name: OAuth
+  - name: Applications
+  - name: Authorization
+paths:
+  /.well-known/openid-configuration:
+    get:
+      tags: [OIDC]
+      summary: OIDC discovery metadata
+      responses:
+        '200':
+          description: Discovery document
+  /.well-known/jwks.json:
+    get:
+      tags: [OIDC]
+      summary: OIDC signing keys
+      responses:
+        '200':
+          description: JSON Web Key Set
+  /oauth/authorize:
+    get:
+      tags: [OAuth]
+      summary: Start authorization-code flow
+      parameters:
+        - { $ref: '#/components/parameters/ClientId' }
+        - { $ref: '#/components/parameters/RedirectUri' }
+        - { name: response_type, in: query, required: true, schema: { type: string, enum: [code] } }
+        - { name: scope, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+        - { name: code_challenge, in: query, required: true, schema: { type: string } }
+        - { name: code_challenge_method, in: query, required: true, schema: { type: string, enum: [S256] } }
+        - { name: nonce, in: query, required: false, schema: { type: string } }
+        - { name: context_type, in: query, required: false, schema: { type: string, enum: [global, tenant, organization, project, resource] } }
+        - { name: context_id, in: query, required: false, schema: { type: string } }
+      responses:
+        '302': { description: Redirect to the application callback or consent page }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /oauth/token:
+    post:
+      tags: [OAuth]
+      summary: Exchange a code, refresh token, service grant, or delegated user token
+      security: [{ clientBasic: [] }]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+      responses:
+        '200':
+          description: Token response
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/InvalidClient' }
+  /oauth/userinfo:
+    get:
+      tags: [OIDC]
+      summary: Read claims for a user-scoped access token
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Application-scoped user claims }
+        '401': { $ref: '#/components/responses/InvalidToken' }
+  /oauth/introspect:
+    post:
+      tags: [OAuth]
+      summary: Introspect an access token owned by the authenticated resource server
+      security: [{ clientBasic: [] }]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        '200': { description: Introspection result }
+        '401': { $ref: '#/components/responses/InvalidClient' }
+  /oauth/revoke:
+    post:
+      tags: [OAuth]
+      summary: Revoke a token owned by the authenticated client
+      security: [{ clientBasic: [] }]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        '200': { description: Token revoked or already inactive }
+  /v1/clients:
+    post:
+      tags: [Applications]
+      summary: Register an application
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApplicationRegistration' }
+      responses:
+        '201': { description: Registered application and one-time secret where applicable }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /v1/clients/{clientId}/roles:
+    parameters:
+      - { $ref: '#/components/parameters/ClientPathId' }
+    get:
+      tags: [Authorization]
+      summary: List roles owned by an application
+      security: [{ cookieAuth: [] }, { clientBasic: [] }]
+      responses:
+        '200': { description: Application roles }
+    post:
+      tags: [Authorization]
+      summary: Create an application role
+      security: [{ cookieAuth: [] }, { clientBasic: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, example: billing_manager }
+                description: { type: string }
+      responses:
+        '201': { description: Role created }
+  /v1/clients/{clientId}/authorization-manifest:
+    parameters:
+      - { $ref: '#/components/parameters/ClientPathId' }
+    get:
+      tags: [Authorization]
+      summary: Read the registered application authorization manifest
+      security: [{ cookieAuth: [] }, { clientBasic: [] }]
+      responses:
+        '200': { description: Registered authorization manifest }
+        '404': { description: Manifest has not been registered }
+    put:
+      tags: [Authorization]
+      summary: Idempotently reconcile application-owned roles and permissions
+      description: Adds or updates definitions and role-permission links. Omitted definitions are not deleted.
+      security: [{ cookieAuth: [] }, { clientBasic: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthorizationManifest' }
+      responses:
+        '200': { description: Reconciled authorization manifest }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { description: Caller cannot manage this application }
+  /v1/clients/{clientId}/delegations:
+    parameters:
+      - { $ref: '#/components/parameters/ClientPathId' }
+    get:
+      tags: [Applications]
+      summary: List target audiences this client may access on behalf of users
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: Delegation policies }
+    post:
+      tags: [Applications]
+      summary: Allow a source client to request delegated tokens for a target audience
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetClientId, allowedScopes]
+              properties:
+                targetClientId: { type: string }
+                allowedScopes: { type: array, minItems: 1, items: { type: string } }
+      responses:
+        '201': { description: Delegation policy created }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /v1/clients/{clientId}/delegations/{targetClientId}:
+    parameters:
+      - { $ref: '#/components/parameters/ClientPathId' }
+      - { name: targetClientId, in: path, required: true, schema: { type: string } }
+    delete:
+      tags: [Applications]
+      summary: Remove a delegated target audience policy
+      security: [{ cookieAuth: [] }]
+      responses:
+        '204': { description: Delegation policy removed }
+  /v1/clients/{clientId}/users/{userId}/roles:
+    parameters:
+      - { $ref: '#/components/parameters/ClientPathId' }
+      - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: contextType, in: query, required: false, schema: { type: string, enum: [global, tenant, organization, project, resource] } }
+      - { name: contextId, in: query, required: false, schema: { type: string } }
+    get:
+      tags: [Authorization]
+      summary: Read context-scoped roles and permissions for a user
+      security: [{ cookieAuth: [] }, { clientBasic: [] }]
+      responses:
+        '200': { description: Context-scoped authorization grants }
+    put:
+      tags: [Authorization]
+      summary: Replace context-scoped role assignments
+      security: [{ cookieAuth: [] }, { clientBasic: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [roles]
+              properties:
+                roles: { type: array, items: { type: string } }
+                contextType: { type: string, enum: [global, tenant, organization, project, resource] }
+                contextId: { type: string }
+      responses:
+        '200': { description: Updated grants }
+components:
+  parameters:
+    ClientId: { name: client_id, in: query, required: true, schema: { type: string } }
+    RedirectUri: { name: redirect_uri, in: query, required: true, schema: { type: string, format: uri } }
+    ClientPathId: { name: clientId, in: path, required: true, schema: { type: string } }
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+    clientBasic: { type: http, scheme: basic }
+    cookieAuth: { type: apiKey, in: cookie, name: auth_token }
+  schemas:
+    ApplicationRegistration:
+      type: object
+      required: [clientId, name]
+      properties:
+        clientId: { type: string, pattern: '^[A-Za-z0-9._-]{1,64}$' }
+        name: { type: string }
+        description: { type: string }
+        clientType: { type: string, enum: [public, confidential, service] }
+        secret: { type: string, writeOnly: true }
+        redirectUris: { type: array, items: { type: string, format: uri } }
+        grantTypes: { type: array, items: { type: string, enum: [authorization_code, refresh_token, client_credentials, 'urn:ietf:params:oauth:grant-type:token-exchange'] } }
+        allowedScopes: { type: array, items: { type: string } }
+    TokenRequest:
+      type: object
+      required: [grant_type]
+      properties:
+        grant_type: { type: string, enum: [authorization_code, refresh_token, client_credentials, 'urn:ietf:params:oauth:grant-type:token-exchange'] }
+        code: { type: string }
+        code_verifier: { type: string }
+        redirect_uri: { type: string, format: uri }
+        refresh_token: { type: string }
+        scope: { type: string }
+        audience: { type: string, description: Target client/resource-server audience for token exchange }
+        subject_token: { type: string, writeOnly: true }
+        subject_token_type: { type: string, enum: ['urn:ietf:params:oauth:token-type:access_token'] }
+        context_type: { type: string, enum: [global, tenant, organization, project, resource] }
+        context_id: { type: string }
+        client_id: { type: string }
+        client_secret: { type: string, writeOnly: true }
+    AuthorizationManifest:
+      type: object
+      required: [version, permissions, roles]
+      properties:
+        version: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' }
+        permissions:
+          type: array
+          maxItems: 500
+          items:
+            type: object
+            required: [name]
+            properties:
+              name: { type: string, pattern: '^[A-Za-z0-9_:.-]{1,80}$' }
+              description: { type: string, maxLength: 500 }
+        roles:
+          type: array
+          maxItems: 200
+          items:
+            type: object
+            required: [name, permissions]
+            properties:
+              name: { type: string, pattern: '^[A-Za-z0-9_-]{1,50}$' }
+              description: { type: string, maxLength: 500 }
+              permissions: { type: array, items: { type: string } }
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, example: Bearer }
+        expires_in: { type: integer }
+        refresh_token: { type: string }
+        id_token: { type: string }
+        scope: { type: string }
+        issued_token_type: { type: string }
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { type: object, properties: { error: { type: string }, error_description: { type: string } } }
+    InvalidClient:
+      description: Invalid client authentication
+    InvalidToken:
+      description: Invalid or inactive bearer token

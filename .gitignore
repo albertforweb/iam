@@ -1,0 +1,9 @@
+node_modules/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+iam.oidc.key
+*.pem
+.vaults
+.vaults.*.tmp

@@ -1,0 +1,22 @@
+{
+  "applications": [
+    {
+      "clientId": "mainsite",
+      "name": "Main Site",
+      "description": "Adventure aggregation and account-facing application",
+      "clientType": "confidential",
+      "grantTypes": [
+        "authorization_code",
+        "refresh_token",
+        "urn:ietf:params:oauth:grant-type:token-exchange"
+      ]
+    },
+    {
+      "clientId": "blogs-api",
+      "name": "Blogs API",
+      "description": "Adventure blogs resource server",
+      "clientType": "service",
+      "grantTypes": ["client_credentials"]
+    }
+  ]
+}
