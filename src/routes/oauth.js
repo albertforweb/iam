@@ -3,10 +3,12 @@ import { Router } from 'express';
 import {
   getClientByPublicId,
   getClientById,
+  getEffectiveUiSettings,
   verifyClientSecret,
   getUser,
   getUserRolesForClient,
   userPermissionsForClient,
+  ensureDefaultRoleForClient,
   createAuthorizationCode,
   getAuthorizationCode,
   consumeAuthorizationCode,
@@ -97,8 +99,11 @@ function authenticateTokenClient(req, body, grantType) {
   const client = getClientByPublicId(String(clientId ?? ''));
   if (!client || !client.enabled) return null;
 
-  // Public clients authenticate the authorization-code exchange with PKCE.
-  if (client.client_type === 'public') return grantType === 'authorization_code' ? client : null;
+  // Public clients authenticate browser exchanges with PKCE and do not have
+  // a secret to present for refresh or revocation.
+  if (client.client_type === 'public') {
+    return ['authorization_code', 'refresh_token', 'revoke'].includes(grantType) ? client : null;
+  }
 
   const secret = basic?.secret ?? body.client_secret;
   return verifyClientSecret(client.client_id, secret) ? client : null;
@@ -150,6 +155,10 @@ function decodeAuthorizationRequest(encoded) {
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+}
+
+function themeColor(value, fallback) {
+  return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
 }
 
 function issueAuthorizationCode(req, res, client, user, params, requested) {
@@ -228,8 +237,31 @@ router.get('/oauth/authorize', authorizeLimit, (req, res) => {
   const token = req.cookies?.[COOKIE_NAME];
   const user = token ? getSession(token) : null;
   if (!user) {
-    const next = encodeURIComponent(`/api/auth/oauth/authorize?${urlEncodeForm(req.query)}`);
-    return res.redirect(`/?next=${next}`);
+    const loginUrl = new URL(`${issuerFor(req)}/login`);
+    loginUrl.searchParams.set('next', `/api/auth/oauth/authorize?${urlEncodeForm(req.query)}`);
+    return res.redirect(loginUrl.toString());
+  }
+
+  // The application owns the role definition; IAM only applies the
+  // application's declared default role when this user has no membership in
+  // that application yet. Existing app-specific assignments are preserved.
+  const provisioning = ensureDefaultRoleForClient(user.id, client.id, client.default_role, context);
+  if (provisioning.error) {
+    recordAuditEvent({
+      eventType: 'application_default_role_provisioning_failed',
+      userId: user.id,
+      clientId: client.id,
+      metadata: { role: client.default_role, error: provisioning.error },
+    });
+    return res.status(503).json({ error: 'server_error', error_description: 'Application authorization is not configured correctly' });
+  }
+  if (provisioning.assigned) {
+    recordAuditEvent({
+      eventType: 'application_default_role_provisioned',
+      userId: user.id,
+      clientId: client.id,
+      metadata: { role: client.default_role, context_type: context.contextType, context_id: context.contextId },
+    });
   }
 
   const granted = userGrantedScopes(user, client, scopeResult.requested, context);
@@ -251,10 +283,136 @@ router.get('/oauth/consent', (req, res) => {
   if (!client.redirect_uris.includes(params.redirect_uri) || !clientAllowedScopes(client, requested)) {
     return res.status(400).json({ error: 'invalid_request' });
   }
+  const ui = getEffectiveUiSettings(client.id);
+  const theme = {
+    pageTitle: ui.pageTitle || client.name,
+    brandName: ui.brandName || client.name,
+    logoText: ui.logoText || 'I',
+    subtitle: ui.subtitle || 'Secure access request',
+    backgroundColor: themeColor(ui.backgroundColor, '#070b18'),
+    surfaceColor: themeColor(ui.surfaceColor, '#141d36'),
+    inputBackgroundColor: themeColor(ui.inputBackgroundColor, '#0a1123'),
+    inputBorderColor: themeColor(ui.inputBorderColor, '#8199dd'),
+    textColor: themeColor(ui.textColor, '#f3f5ff'),
+    mutedTextColor: themeColor(ui.mutedTextColor, '#9caacc'),
+    accentColor: themeColor(ui.accentColor, '#7c83ff'),
+    accentStrongColor: themeColor(ui.accentStrongColor, '#6366f1'),
+    buttonTextColor: themeColor(ui.buttonTextColor, '#ffffff'),
+  };
   const granted = userGrantedScopes(user, client, requested);
-  const labels = granted.map((scope) => `<li>${escapeHtml(scope)}</li>`).join('');
+  const scopeCopy = (scope) => {
+    const builtIn = {
+      openid: ['Basic identity', 'Confirm your identity to this application'],
+      profile: ['Profile information', 'Share your display name and username'],
+      email: ['Email address', 'Share your email address'],
+    }[scope];
+    if (builtIn) return builtIn;
+    const parts = scope.split(':');
+    const application = parts[0] || 'Application';
+    const action = parts.slice(1).join(' · ') || 'Access';
+    return [`${application} · ${action}`, 'Application-specific access permission'];
+  };
+  const labels = granted.map((scope) => {
+    const [label, description] = scopeCopy(scope);
+    return `<li><span class="scope-check" aria-hidden="true">✓</span><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(description)}</small></span></li>`;
+  }).join('');
   const requestValue = escapeHtml(req.query.request);
-  res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><title>Authorize ${escapeHtml(client.name)}</title></head><body><main><h1>${escapeHtml(client.name)} requests access</h1><p>Signed in as ${escapeHtml(user.username)}.</p><ul>${labels || '<li>basic sign-in</li>'}</ul><form method="post" action="/oauth/consent"><input type="hidden" name="request" value="${requestValue}"><button name="decision" value="deny" type="submit">Deny</button><button name="decision" value="allow" type="submit">Allow</button></form></main></body></html>`);
+  res.set('Cache-Control', 'no-store');
+  res.type('html').send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(theme.pageTitle)} · Authorize ${escapeHtml(client.name)}</title>
+  <style>
+    :root {
+      --bg: ${theme.backgroundColor};
+      --panel: ${theme.surfaceColor};
+      --panel-soft: ${theme.inputBackgroundColor};
+      --border: ${theme.inputBorderColor};
+      --text: ${theme.textColor};
+      --muted: ${theme.mutedTextColor};
+      --accent: ${theme.accentColor};
+      --accent-strong: ${theme.accentStrongColor};
+      --button-text: ${theme.buttonTextColor};
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 32px 18px;
+      color: var(--text);
+      background: linear-gradient(135deg, var(--bg), var(--panel));
+      font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .shell { width: min(100%, 520px); }
+    .brand { display: flex; align-items: center; gap: 12px; margin: 0 auto 22px; width: fit-content; }
+    .brand-mark {
+      display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px;
+      color: var(--button-text); font-size: 21px; font-weight: 800;
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      box-shadow: 0 12px 30px rgba(0, 0, 0, .24);
+    }
+    .brand strong { font-size: 19px; letter-spacing: -.02em; }
+    .brand small { display: block; color: var(--muted); font-size: 12px; }
+    .card {
+      padding: 34px;
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      background: var(--panel);
+      box-shadow: 0 28px 80px rgba(0, 0, 0, .38), inset 0 1px rgba(255, 255, 255, .04);
+    }
+    .eyebrow { margin: 0 0 8px; color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(26px, 5vw, 34px); line-height: 1.12; letter-spacing: -.04em; }
+    .intro { margin: 12px 0 0; color: var(--muted); }
+    .intro strong { color: var(--text); font-weight: 650; }
+    .permissions { margin: 26px 0 0; padding: 18px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel-soft); }
+    .permissions-heading { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 12px; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .permissions-heading span:last-child { color: var(--accent); }
+    ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+    li { display: flex; gap: 12px; align-items: flex-start; padding: 10px 8px; border-radius: 10px; }
+    li:hover { background: var(--panel); }
+    .scope-check { flex: 0 0 auto; display: grid; place-items: center; width: 22px; height: 22px; margin-top: 1px; border-radius: 50%; color: var(--button-text); background: var(--accent-strong); font-size: 13px; font-weight: 800; }
+    li strong, li small { display: block; }
+    li strong { color: var(--text); font-size: 14px; font-weight: 650; }
+    li small { margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .notice { margin: 18px 0 0; color: var(--muted); font-size: 12px; }
+    .actions { display: flex; gap: 12px; margin-top: 28px; }
+    button { flex: 1; min-height: 46px; padding: 0 18px; border-radius: 11px; font: inherit; font-weight: 750; cursor: pointer; transition: transform .15s ease, filter .15s ease, background .15s ease; }
+    button:hover { transform: translateY(-1px); filter: brightness(1.08); }
+    button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+    .deny { color: var(--text); border: 1px solid var(--border); background: transparent; }
+    .allow { color: var(--button-text); border: 0; background: linear-gradient(135deg, var(--accent), var(--accent-strong)); box-shadow: 0 10px 24px rgba(0, 0, 0, .24); }
+    .footer { margin-top: 18px; color: var(--muted); text-align: center; font-size: 11px; }
+    @media (max-width: 480px) { .card { padding: 26px 20px; border-radius: 20px; } .actions { flex-direction: column-reverse; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="brand"><span class="brand-mark">${escapeHtml(theme.logoText)}</span><span><strong>${escapeHtml(theme.brandName)}</strong><small>${escapeHtml(theme.subtitle)}</small></span></div>
+    <section class="card" aria-labelledby="consent-title">
+      <p class="eyebrow">Authorization request</p>
+      <h1 id="consent-title">${escapeHtml(client.name)} requests access</h1>
+      <p class="intro">You are signed in as <strong>@${escapeHtml(user.username)}</strong>.</p>
+      <section class="permissions" aria-labelledby="permissions-title">
+        <div class="permissions-heading"><span id="permissions-title">This app can</span><span>${granted.length} permission${granted.length === 1 ? '' : 's'}</span></div>
+        <ul>${labels || '<li><span class="scope-check" aria-hidden="true">✓</span><span><strong>Sign in</strong><small>Confirm your identity to this application</small></span></li>'}</ul>
+      </section>
+      <p class="notice">Only the permissions listed above will be shared with this application.</p>
+      <form method="post" action="/oauth/consent">
+        <input type="hidden" name="request" value="${requestValue}">
+        <div class="actions">
+          <button class="deny" name="decision" value="deny" type="submit">Deny</button>
+          <button class="allow" name="decision" value="allow" type="submit">Allow access</button>
+        </div>
+      </form>
+    </section>
+    <p class="footer">You can close this window if you do not recognize the application.</p>
+  </main>
+</body>
+</html>`);
 });
 
 router.post('/oauth/consent', (req, res) => {
@@ -451,7 +609,7 @@ router.post('/oauth/introspect', (req, res) => {
 });
 
 router.post('/oauth/revoke', (req, res) => {
-  const client = authenticateTokenClient(req, {}, 'revoke');
+  const client = authenticateTokenClient(req, req.body ?? {}, 'revoke');
   if (!client) return res.status(401).json({ error: 'invalid_client' });
   const token = getOauthToken(String(req.body?.token ?? ''));
   if (token?.client_id === client.id) deleteOauthToken(token.token);

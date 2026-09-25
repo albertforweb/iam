@@ -15,17 +15,34 @@ import {
   countActiveAdmins,
   changePassword,
   createResetTokenForUsername,
+  createResetTokenForEmail,
+  deleteResetToken,
   resetPasswordByToken,
   getUsernameByEmail,
   recordAuditEvent,
+  getClientById,
+  getClientByPublicId,
+  getUserRolesForClient,
 } from '../db.js';
 import { requireAuth, requireRole, authUser, COOKIE_NAME, COOKIE_OPTIONS, rateLimit } from '../middleware.js';
+import { isMailConfigured, sendPasswordResetEmail } from '../mailer.js';
 
 const router = Router();
 
 const ALLOWED_STATUSES = ['active', 'inactive', 'suspended'];
 const loginLimit = rateLimit({ name: 'login', max: 10, windowMs: 60_000 });
 const recoveryLimit = rateLimit({ name: 'recovery', max: 5, windowMs: 60_000 });
+
+function normalizeRecoveryReturnTo(value) {
+  if (typeof value !== 'string' || !value || value.length > 4096 || value.includes('\\')) return '';
+  if (!value.startsWith('/') || value.startsWith('//')) return '';
+  try {
+    const parsed = new URL(value, 'http://iam.local');
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return '';
+  }
+}
 
 function missing(required, body) {
   const absent = required.filter((k) => body[k] === undefined || body[k] === null || body[k] === '');
@@ -54,8 +71,16 @@ function lastAdminGuard(req, targetUser, newRoles) {
 }
 
 // GET /api/auth/users
-router.get('/users', requireAuth, requireRole('admin'), (req, res) => {
-  res.json({ users: listUsers() });
+router.get('/users', requireAuth, (req, res) => {
+  const requestedClientId = typeof req.query.client_id === 'string' ? req.query.client_id : SYSTEM_CLIENT_ID;
+  const client = requestedClientId === SYSTEM_CLIENT_ID
+    ? getClientById(SYSTEM_CLIENT_ID)
+    : getClientByPublicId(requestedClientId);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+  const isSystemAdmin = getUserRolesForClient(req.user.id, SYSTEM_CLIENT_ID).includes('admin');
+  const isApplicationAdmin = getUserRolesForClient(req.user.id, client.id).includes('admin');
+  if (!isSystemAdmin && !isApplicationAdmin) return res.status(403).json({ error: 'Forbidden: insufficient role' });
+  res.json({ users: listUsers(client.id) });
 });
 
 // POST /api/auth/login
@@ -82,7 +107,7 @@ router.post('/login', loginLimit, (req, res) => {
 router.post('/register', (req, res) => {
   const { username, displayName, email, password } = req.body ?? {};
 
-  const err = missing(['username', 'displayName', 'password'], req.body ?? {});
+  const err = missing(['username', 'displayName', 'email', 'password'], req.body ?? {});
   if (err) return res.status(400).json({ error: err });
 
   if (username.trim() !== username || !username.trim()) {
@@ -91,21 +116,21 @@ router.post('/register', (req, res) => {
   if (typeof password !== 'string' || password.length < 8) {
     return res.status(400).json({ error: 'password must be a string with at least 8 characters' });
   }
-  if (email !== undefined && typeof email !== 'string') {
-    return res.status(400).json({ error: 'email must be a string' });
+  if (typeof email !== 'string' || !email.trim()) {
+    return res.status(400).json({ error: 'email is required' });
   }
 
   if (isUsernameTaken(username)) {
     return res.status(409).json({ error: 'username already exists' });
   }
-  if (email && isEmailTaken(email)) {
+  if (isEmailTaken(email)) {
     return res.status(409).json({ error: 'email already exists' });
   }
 
   const user = createUser({
     username: username.trim(),
     displayName,
-    email,
+    email: email.trim(),
     status: 'active',
     password,
     roles: ['member'],
@@ -116,8 +141,9 @@ router.post('/register', (req, res) => {
 const DEV_MODE = (process.env.IAM_DEV_MODE ?? (process.env.NODE_ENV !== 'production' ? 'true' : 'false')) === 'true';
 
 // POST /api/auth/forgot-password (public)
-router.post('/forgot-password', recoveryLimit, (req, res) => {
-  const { username, email } = req.body ?? {};
+router.post('/forgot-password', recoveryLimit, async (req, res) => {
+  const { username, email, returnTo } = req.body ?? {};
+  const recoveryReturnTo = normalizeRecoveryReturnTo(returnTo);
   const hasUsername = typeof username === 'string' && username.trim();
   const hasEmail = typeof email === 'string' && email.trim();
   if (!hasUsername && !hasEmail) {
@@ -125,7 +151,12 @@ router.post('/forgot-password', recoveryLimit, (req, res) => {
   }
 
   if (hasUsername) {
-    const result = createResetTokenForUsername(username.trim());
+    if (!DEV_MODE && !isMailConfigured()) {
+      return res.status(503).json({
+        error: 'Password recovery delivery is not configured. Contact an IAM administrator.',
+      });
+    }
+    const result = createResetTokenForUsername(username.trim(), { allowWithoutEmail: DEV_MODE });
     if (!result) return res.json({ ok: true, message: 'If the account exists, a reset token was generated.' });
     if (DEV_MODE) {
       console.log(`[forgot-password] Reset token for ${result.username}: ${result.token}`);
@@ -137,22 +168,50 @@ router.post('/forgot-password', recoveryLimit, (req, res) => {
         message: 'Reset token generated (dev mode).',
       });
     }
-    return res.json({ ok: true, message: 'If the account exists, a reset link was sent.' });
+    return deliverResetEmail(result, res, recoveryReturnTo);
   }
 
-  const uname = getUsernameByEmail(email.trim());
+  if (!DEV_MODE && !isMailConfigured()) {
+    return res.status(503).json({
+      error: 'Password recovery delivery is not configured. Contact an IAM administrator.',
+    });
+  }
   if (DEV_MODE) {
+    const uname = getUsernameByEmail(email.trim());
     return res.json({
       ok: true,
       username: uname ?? null,
       message: uname ? 'Username recovered (dev mode).' : 'No account found with that email (dev mode).',
     });
   }
-  return res.json({ ok: true });
+  const result = createResetTokenForEmail(email.trim());
+  if (result) return deliverResetEmail(result, res, recoveryReturnTo);
+  return res.json({ ok: true, message: 'If the account exists, a reset link was sent.' });
 });
+
+async function deliverResetEmail(result, res, returnTo = '') {
+  const publicBaseUrl = (process.env.IAM_PUBLIC_BASE_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
+  const resetUrl = new URL(`${publicBaseUrl}/login`);
+  resetUrl.searchParams.set('username', result.username);
+  resetUrl.searchParams.set('token', result.token);
+  if (returnTo) resetUrl.searchParams.set('next', returnTo);
+  try {
+    await sendPasswordResetEmail({ ...result, to: result.email, resetUrl: resetUrl.toString() });
+    return res.json({ ok: true, message: 'If the account exists, a reset link was sent.' });
+  } catch (error) {
+    deleteResetToken(result.token);
+    console.error(`[forgot-password] Failed to deliver reset email: ${error.message}`);
+    return res.status(503).json({ error: 'Password recovery delivery is temporarily unavailable.' });
+  }
+}
 
 // POST /api/auth/reset-password (public)
 router.post('/reset-password', recoveryLimit, (req, res) => {
+  if (!DEV_MODE && !isMailConfigured()) {
+    return res.status(503).json({
+      error: 'Password recovery delivery is not configured. Contact an IAM administrator.',
+    });
+  }
   const { username, token, newPassword } = req.body ?? {};
 
   const err = missing(['username', 'token', 'newPassword'], req.body ?? {});
@@ -209,7 +268,7 @@ router.get('/users/:id', requireAuth, requireRole('admin'), (req, res) => {
 router.post('/users', requireAuth, requireRole('admin'), (req, res) => {
   const { username, displayName, email, status, password, roles } = req.body ?? {};
 
-  const err = missing(['username', 'displayName'], req.body ?? {});
+  const err = missing(['username', 'displayName', 'email'], req.body ?? {});
   if (err) return res.status(400).json({ error: err });
 
   if (status !== undefined && !ALLOWED_STATUSES.includes(status)) {
@@ -224,8 +283,8 @@ router.post('/users', requireAuth, requireRole('admin'), (req, res) => {
     return res.status(400).json({ error: 'password must be a string with at least 8 characters' });
   }
 
-  if (email !== undefined && typeof email !== 'string') {
-    return res.status(400).json({ error: 'email must be a string' });
+  if (typeof email !== 'string' || !email.trim()) {
+    return res.status(400).json({ error: 'email is required' });
   }
 
   const roleErr = validateRoles(roles);
@@ -234,11 +293,11 @@ router.post('/users', requireAuth, requireRole('admin'), (req, res) => {
   if (isUsernameTaken(username)) {
     return res.status(409).json({ error: 'username already exists' });
   }
-  if (email && isEmailTaken(email)) {
+  if (isEmailTaken(email)) {
     return res.status(409).json({ error: 'email already exists' });
   }
 
-  const user = createUser({ username: username.trim(), displayName, email, status, password, roles });
+  const user = createUser({ username: username.trim(), displayName, email: email.trim(), status, password, roles });
   res.status(201).json({ user });
 });
 

@@ -10,9 +10,9 @@
   <section id="authView" class="spa-auth-view" hidden>
     <main class="wrap">
       <div class="card auth-panel" data-auth-screen-panel="login">
-        <div class="auth-lockup"><div class="brand-mark">I</div><strong>IAM</strong></div>
+        <div class="auth-lockup"><div class="brand-mark" data-ui-logo>I</div><strong data-ui-brand-name>IAM</strong></div>
         <h2>Sign in</h2>
-        <p class="subtitle">Access your IAM account</p>
+        <p class="subtitle" data-ui-auth-subtitle>Access your IAM account</p>
         <form id="loginForm" novalidate>
           <label for="loginUsername">Username</label>
           <input id="loginUsername" name="username" type="text" autocomplete="username" required>
@@ -28,7 +28,7 @@
       </div>
 
       <div class="card auth-panel" data-auth-screen-panel="signup" hidden>
-        <div class="auth-lockup"><div class="brand-mark">I</div><strong>IAM</strong></div>
+        <div class="auth-lockup"><div class="brand-mark" data-ui-logo>I</div><strong data-ui-brand-name>IAM</strong></div>
         <h2>Create account</h2>
         <p class="subtitle">Register for an IAM account</p>
         <form id="signupForm" novalidate>
@@ -36,8 +36,8 @@
           <input id="signupUsername" name="username" type="text" autocomplete="username" required>
           <label for="signupDisplayName">Display name</label>
           <input id="signupDisplayName" name="displayName" type="text" autocomplete="name" required>
-          <label for="signupEmail">Email <span class="field-hint">(optional)</span></label>
-          <input id="signupEmail" name="email" type="email" autocomplete="email">
+          <label for="signupEmail">Email</label>
+          <input id="signupEmail" name="email" type="email" autocomplete="email" required>
           <label for="signupPassword">Password <span class="field-hint">(min 8 chars)</span></label>
           <input id="signupPassword" name="password" type="password" autocomplete="new-password" minlength="8" required>
           <label for="signupConfirm">Confirm password</label>
@@ -49,7 +49,7 @@
       </div>
 
       <div class="card auth-panel" data-auth-screen-panel="forgot" hidden>
-        <div class="auth-lockup"><div class="brand-mark">I</div><strong>IAM</strong></div>
+        <div class="auth-lockup"><div class="brand-mark" data-ui-logo>I</div><strong data-ui-brand-name>IAM</strong></div>
         <h2>Account recovery</h2>
         <p class="subtitle">Recover your username or reset your password</p>
         <label for="recoveryMode">What do you need?</label>
@@ -58,7 +58,7 @@
           <option value="username">I forgot my username</option>
         </select>
         <form id="forgotForm" novalidate>
-          <label id="recoveryFieldLabel" for="recoveryField">Username</label>
+          <label id="recoveryFieldLabel" for="recoveryField">Username or email</label>
           <input id="recoveryField" name="field" type="text" autocomplete="off" required>
           <button id="forgotSubmitBtn" type="submit">Continue</button>
         </form>
@@ -67,7 +67,7 @@
       </div>
 
       <div class="card auth-panel" data-auth-screen-panel="reset" hidden>
-        <div class="auth-lockup"><div class="brand-mark">I</div><strong>IAM</strong></div>
+        <div class="auth-lockup"><div class="brand-mark" data-ui-logo>I</div><strong data-ui-brand-name>IAM</strong></div>
         <h2>Reset password</h2>
         <p class="subtitle">Set a new password with your reset token</p>
         <form id="resetForm" novalidate>
@@ -92,16 +92,17 @@
 
   <div id="consoleShell" class="console-shell" hidden>
     <aside class="console-sidebar">
-      <a class="console-brand" href="index.html">
-        <span class="brand-mark">I</span>
-        <span><strong>IAM</strong><small>Control plane</small></span>
+      <a class="console-brand" href="./">
+        <span class="brand-mark" data-ui-logo>I</span>
+        <span><strong data-ui-brand-name>IAM</strong><small>Control plane</small></span>
       </a>
       <div id="adminNavLabel" class="console-nav-label">Workspace</div>
       <nav id="adminNavigation" class="console-nav" aria-label="Console navigation">
         <button class="console-nav-item active" data-view="overview"><span>⌂</span> Overview</button>
         <button class="console-nav-item" data-view="users"><span>◉</span> Users</button>
         <button class="console-nav-item" data-view="applications"><span>▣</span> Applications</button>
-        <button class="console-nav-item" data-view="authorization"><span>◇</span> Scopes &amp; roles</button>
+        <button class="console-nav-item" data-view="scopes"><span>◇</span> Scopes</button>
+        <button class="console-nav-item" data-view="roles"><span>◆</span> Roles</button>
         <button class="console-nav-item" data-view="oauth"><span>⌁</span> OAuth clients</button>
         <button class="console-nav-item" data-view="delegations"><span>⇄</span> Delegations</button>
         <button class="console-nav-item" data-view="audit"><span>≡</span> Audit log</button>
@@ -110,6 +111,10 @@
       <nav id="accountNavigation" class="console-nav account-nav" aria-label="Account navigation">
         <button class="console-nav-item" data-view="profile"><span>◉</span> Profile</button>
         <button class="console-nav-item" data-view="password"><span>◆</span> Password</button>
+      </nav>
+      <div id="settingsNavLabel" class="console-nav-label settings-nav-label" hidden>Settings</div>
+      <nav id="settingsNavigation" class="console-nav settings-nav" aria-label="Settings navigation" hidden>
+        <button class="console-nav-item" data-view="settings"><span>⚙</span> Settings</button>
       </nav>
       <div class="console-sidebar-footer">
         <a href="#profile" data-action="open-profile" class="console-user-link">
@@ -161,12 +166,50 @@
         <article class="console-panel table-panel"><div class="table-wrap"><table><thead><tr><th>Application</th><th>Type</th><th>OAuth grants</th><th>Scopes</th><th>Status</th><th class="align-right">Actions</th></tr></thead><tbody id="applicationsTable"></tbody></table></div></article>
       </section>
 
-      <section class="console-view" data-view-panel="authorization">
-        <div class="section-heading"><div><span class="console-kicker">APPLICATION AUTHORIZATION</span><h2>Scopes &amp; roles</h2><p>Define the permissions and role bundles owned by each application.</p></div><select id="authorizationAppSelect" class="app-select"></select></div>
-        <div class="console-two-column auth-columns">
-          <article class="console-panel"><div class="panel-heading"><div><span class="console-kicker">SCOPES</span><h3>Permission scopes</h3></div><button class="console-small-button" data-action="open-permission-create">＋ Add scope</button></div><div id="permissionsList" class="stack-list"></div></article>
-          <article class="console-panel"><div class="panel-heading"><div><span class="console-kicker">ROLE BUNDLES</span><h3>Application roles</h3></div><button class="console-small-button" data-action="open-role-create">＋ Add role</button></div><div id="rolesList" class="stack-list"></div><div id="roleEditor" class="role-editor" hidden></div></article>
-        </div>
+      <section class="console-view" data-view-panel="scopes">
+        <div class="section-heading"><div><span class="console-kicker">APPLICATION AUTHORIZATION</span><h2>Scopes</h2><p>Define the permission scopes owned by each application.</p></div><select id="scopesAppSelect" class="app-select"></select></div>
+        <article class="console-panel"><div class="panel-heading"><div><span class="console-kicker">PERMISSION SCOPES</span><h3>Application scopes</h3></div><button class="console-small-button" data-action="open-permission-create">＋ Add scope</button></div><div id="permissionsList" class="stack-list"></div></article>
+      </section>
+
+      <section class="console-view" data-view-panel="roles">
+        <div class="section-heading"><div><span class="console-kicker">APPLICATION AUTHORIZATION</span><h2>Roles</h2><p>Create role bundles and assign their permission scopes.</p></div><select id="rolesAppSelect" class="app-select"></select></div>
+        <article class="console-panel"><div class="panel-heading"><div><span class="console-kicker">ROLE BUNDLES</span><h3>Application roles</h3></div><button class="console-small-button" data-action="open-role-create">＋ Add role</button></div><div id="rolesList" class="stack-list"></div><div id="roleEditor" class="role-editor" hidden></div></article>
+      </section>
+
+      <section class="console-view" data-view-panel="settings">
+        <div class="section-heading"><div><span class="console-kicker">PUBLIC EXPERIENCE</span><h2>Settings</h2><p>Customize the IAM sign-in and recovery experience for each registered application.</p></div><select id="settingsAppSelect" class="app-select" aria-label="Application theme"></select></div>
+        <article class="console-panel settings-panel">
+          <div class="panel-heading"><div><span class="console-kicker">APPLICATION BRANDING</span><h3>Public IAM theme</h3><p class="panel-description">These values are shown when this application sends users to IAM for authentication.</p></div></div>
+          <form id="settingsForm" class="settings-form" novalidate>
+            <div class="form-grid">
+              <label>Page title<input id="settingsPageTitle" maxlength="80" required></label>
+              <label>Brand name<input id="settingsBrandName" maxlength="80" required></label>
+            </div>
+            <div class="form-grid">
+              <label>Logo text<input id="settingsLogoText" maxlength="4" required></label>
+              <label>Sign-in subtitle<input id="settingsSubtitle" maxlength="160" required></label>
+            </div>
+            <div class="settings-color-grid">
+              <label>Accent color<input id="settingsAccentColor" type="color" required></label>
+              <label>Accent hover color<input id="settingsAccentStrongColor" type="color" required></label>
+              <label>Background color<input id="settingsBackgroundColor" type="color" required></label>
+              <label>Panel color<input id="settingsSurfaceColor" type="color" required></label>
+              <label>Text color<input id="settingsTextColor" type="color" required></label>
+              <label>Muted text color<input id="settingsMutedTextColor" type="color" required></label>
+            </div>
+            <p class="panel-description">Component colors default to a readable palette derived from the theme above. Enable an override only when a component needs a specific color.</p>
+            <div class="settings-component-color-grid">
+              <div class="settings-color-field"><label>Input background<input id="settingsInputBackgroundColor" type="color"></label><label class="settings-auto"><input id="settingsInputBackgroundAuto" type="checkbox" data-settings-auto-for="settingsInputBackgroundColor"> Use automatic color</label></div>
+              <div class="settings-color-field"><label>Input border<input id="settingsInputBorderColor" type="color"></label><label class="settings-auto"><input id="settingsInputBorderAuto" type="checkbox" data-settings-auto-for="settingsInputBorderColor"> Use automatic color</label></div>
+              <div class="settings-color-field"><label>Input text<input id="settingsInputTextColor" type="color"></label><label class="settings-auto"><input id="settingsInputTextAuto" type="checkbox" data-settings-auto-for="settingsInputTextColor"> Use automatic color</label></div>
+              <div class="settings-color-field"><label>Button text<input id="settingsButtonTextColor" type="color"></label><label class="settings-auto"><input id="settingsButtonTextAuto" type="checkbox" data-settings-auto-for="settingsButtonTextColor"> Use automatic color</label></div>
+              <div class="settings-color-field"><label>Link color<input id="settingsLinkColor" type="color"></label><label class="settings-auto"><input id="settingsLinkAuto" type="checkbox" data-settings-auto-for="settingsLinkColor"> Use automatic color</label></div>
+              <div class="settings-color-field"><label>Link hover color<input id="settingsLinkHoverColor" type="color"></label><label class="settings-auto"><input id="settingsLinkHoverAuto" type="checkbox" data-settings-auto-for="settingsLinkHoverColor"> Use automatic color</label></div>
+            </div>
+            <div id="settingsFormMessage" class="form-message"></div>
+            <div class="settings-actions"><button class="console-secondary" type="button" data-action="reset-settings">Reset application theme</button><button class="console-primary" type="submit">Save settings</button></div>
+          </form>
+        </article>
       </section>
 
       <section class="console-view" data-view-panel="oauth">
@@ -222,11 +265,11 @@
 
   <dialog id="appDialog" class="console-dialog"><form id="appForm" method="dialog"><div class="dialog-heading"><div><span class="console-kicker">APPLICATION REGISTRY</span><h2 id="appDialogTitle">Register application</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div><input type="hidden" id="appEditId"><label>Client ID<input id="appClientId" required pattern="[A-Za-z0-9._-]{1,64}"></label><label>Display name<input id="appName" required maxlength="100"></label><label>Description<textarea id="appDescription" rows="2"></textarea></label><div class="form-grid"><label>Client type<select id="appClientType"><option value="confidential">Confidential</option><option value="service">Service</option><option value="public">Public</option></select></label><label>Enabled<select id="appEnabled"><option value="true">Enabled</option><option value="false">Disabled</option></select></label></div><label>Grant types<input id="appGrantTypes" placeholder="authorization_code, refresh_token"></label><label>Redirect URIs<textarea id="appRedirectUris" rows="2" placeholder="One URL per line"></textarea></label><label>Allowed scopes<input id="appAllowedScopes" placeholder="scope:read, scope:write"></label><div id="appFormMessage" class="form-message"></div><div class="dialog-actions"><button type="button" class="console-secondary" data-action="close-dialog">Cancel</button><button class="console-primary" type="submit">Save application</button></div></form></dialog>
 
-  <dialog id="userDialog" class="console-dialog"><form id="userForm" method="dialog"><div class="dialog-heading"><div><span class="console-kicker">DIRECTORY</span><h2 id="userDialogTitle">Create user</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div><input type="hidden" id="userEditId"><label>Username<input id="userUsername" required pattern="[^\s].*"></label><label>Display name<input id="userDisplayName" required maxlength="120"></label><label>Email<input id="userEmail" type="email"></label><div class="form-grid"><label>Status<select id="userStatus"><option value="active">Active</option><option value="inactive">Inactive</option><option value="suspended">Suspended</option></select></label><label>Temporary password<input id="userPassword" type="password" minlength="8" autocomplete="new-password"></label></div><fieldset><legend>System roles</legend><div id="userRoles" class="check-grid"></div></fieldset><div id="userFormMessage" class="form-message"></div><div class="dialog-actions"><button type="button" class="console-secondary" data-action="close-dialog">Cancel</button><button class="console-primary" type="submit">Save user</button></div></form></dialog>
+  <dialog id="userDialog" class="console-dialog"><form id="userForm" method="dialog"><div class="dialog-heading"><div><span class="console-kicker">DIRECTORY</span><h2 id="userDialogTitle">Create user</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div><input type="hidden" id="userEditId"><label>Username<input id="userUsername" required pattern="[^\s].*"></label><label>Display name<input id="userDisplayName" required maxlength="120"></label><label>Email<input id="userEmail" type="email" required></label><div class="form-grid"><label>Status<select id="userStatus"><option value="active">Active</option><option value="inactive">Inactive</option><option value="suspended">Suspended</option></select></label><label>Temporary password<input id="userPassword" type="password" minlength="8" autocomplete="new-password"></label></div><fieldset><legend>System roles</legend><div id="userRoles" class="check-grid"></div></fieldset><div id="userFormMessage" class="form-message"></div><div class="dialog-actions"><button type="button" class="console-secondary" data-action="close-dialog">Cancel</button><button class="console-primary" type="submit">Save user</button></div></form></dialog>
 
-  <dialog id="permissionDialog" class="console-dialog compact-dialog"><form id="permissionForm" method="dialog"><div class="dialog-heading"><div><span class="console-kicker">APPLICATION SCOPE</span><h2>Add permission scope</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div><label>Name<input id="permissionName" required pattern="[A-Za-z0-9_:.-]{1,80}" placeholder="blogs:post:create"></label><label>Description<textarea id="permissionDescription" rows="2"></textarea></label><div id="permissionFormMessage" class="form-message"></div><div class="dialog-actions"><button type="button" class="console-secondary" data-action="close-dialog">Cancel</button><button class="console-primary" type="submit">Add scope</button></div></form></dialog>
+  <dialog id="permissionDialog" class="console-dialog compact-dialog"><form id="permissionForm" method="dialog"><div class="dialog-heading"><div><span class="console-kicker">APPLICATION SCOPE</span><h2 id="permissionDialogTitle">Add permission scope</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div><input type="hidden" id="permissionEditId"><label>Name<input id="permissionName" required pattern="[A-Za-z0-9_:.-]{1,80}" placeholder="blogs:post:create"></label><label>Description<textarea id="permissionDescription" rows="2"></textarea></label><div id="permissionFormMessage" class="form-message"></div><div class="dialog-actions"><button type="button" class="console-secondary" data-action="close-dialog">Cancel</button><button id="permissionSubmitButton" class="console-primary" type="submit">Add scope</button></div></form></dialog>
 
-  <dialog id="roleDialog" class="console-dialog compact-dialog"><form id="roleForm" method="dialog"><div class="dialog-heading"><div><span class="console-kicker">APPLICATION ROLE</span><h2>Add role bundle</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div><label>Name<input id="roleName" required pattern="[A-Za-z0-9_-]{1,50}" placeholder="editor"></label><label>Description<textarea id="roleDescription" rows="2"></textarea></label><div id="roleFormMessage" class="form-message"></div><div class="dialog-actions"><button type="button" class="console-secondary" data-action="close-dialog">Cancel</button><button class="console-primary" type="submit">Add role</button></div></form></dialog>
+  <dialog id="roleDialog" class="console-dialog compact-dialog"><form id="roleForm" method="dialog"><div class="dialog-heading"><div><span class="console-kicker">APPLICATION ROLE</span><h2 id="roleDialogTitle">Add role bundle</h2></div><button type="button" class="dialog-close" data-action="close-dialog">×</button></div><input type="hidden" id="roleEditId"><label>Name<input id="roleName" required pattern="[A-Za-z0-9_-]{1,50}" placeholder="editor"></label><label>Description<textarea id="roleDescription" rows="2"></textarea></label><div id="roleFormMessage" class="form-message"></div><div class="dialog-actions"><button type="button" class="console-secondary" data-action="close-dialog">Cancel</button><button id="roleSubmitButton" class="console-primary" type="submit">Add role</button></div></form></dialog>
 
   <div id="credentialDialog" class="credential-overlay" hidden><div class="credential-card"><span class="console-kicker">ONE-TIME CREDENTIAL</span><h2>Save this client secret</h2><p>For security, IAM will not display this secret again.</p><code id="credentialValue"></code><button id="copyCredential" class="console-secondary">Copy secret</button><button class="console-primary" data-action="close-credential">Done</button></div></div>
   <script src="app.js"></script><script src="console.js"></script>

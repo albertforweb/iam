@@ -66,7 +66,16 @@ export function createApp() {
   const uiEnabled = (process.env.IAM_UI_ENABLED ?? 'true') === 'true';
   if (uiEnabled) {
     const path = process.env.IAM_UI_DIR;
-    if (path) app.use(express.static(path));
+    if (path) {
+      // The UI is a single-page application. Keep index.html as an internal
+      // asset name and expose route-level entry points for auth and console.
+      app.get('/index.html', (req, res) => {
+        const query = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
+        res.redirect(301, `/${query}`);
+      });
+      app.get('/login', (req, res) => res.sendFile('index.html', { root: path }));
+      app.use(express.static(path));
+    }
   }
 
   app.use((req, res) => {

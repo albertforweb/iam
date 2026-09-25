@@ -1,9 +1,14 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
 import {
+  SYSTEM_CLIENT_ID,
   listClients,
   getClientById,
   getClientByPublicId,
+  getUiSettings,
+  getEffectiveUiSettings,
+  upsertUiSettings,
+  deleteUiSettings,
   createClient,
   updateClient,
   rotateClientSecret,
@@ -25,6 +30,10 @@ import {
   getRolePermissions,
   setRolePermissions,
   getUser,
+  createUser,
+  updateUser,
+  isUsernameTaken,
+  isEmailTaken,
   getUserRolesForClient,
   userPermissionsForClient,
   setUserRolesForClient,
@@ -47,6 +56,7 @@ const CLIENT_TYPES = ['public', 'confidential', 'service'];
 const TOKEN_EXCHANGE_GRANT = 'urn:ietf:params:oauth:grant-type:token-exchange';
 const GRANT_TYPES = ['authorization_code', 'refresh_token', 'client_credentials', TOKEN_EXCHANGE_GRANT];
 const CONTEXT_TYPES = ['global', 'tenant', 'organization', 'project', 'resource'];
+const ALLOWED_USER_STATUSES = ['active', 'inactive', 'suspended'];
 
 function validateClientId(clientId) {
   if (typeof clientId !== 'string' || clientId.trim() !== clientId || !clientId.trim()) {
@@ -72,6 +82,31 @@ function validateRedirectUris(uris) {
       if (!['http:', 'https:'].includes(new URL(u).protocol)) return `invalid redirect_uri: ${u}`;
     } catch {
       return `invalid redirect_uri: ${u}`;
+    }
+  }
+  return null;
+}
+
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+function validateUiSettings(settings) {
+  const stringFields = [
+    ['pageTitle', 80],
+    ['brandName', 80],
+    ['logoText', 4],
+    ['subtitle', 160],
+  ];
+  for (const [field, maxLength] of stringFields) {
+    if (typeof settings[field] !== 'string' || !settings[field].trim() || settings[field].length > maxLength) {
+      return `${field} must be a non-empty string of at most ${maxLength} characters`;
+    }
+  }
+  for (const field of ['accentColor', 'accentStrongColor', 'backgroundColor', 'surfaceColor', 'textColor', 'mutedTextColor']) {
+    if (!HEX_COLOR_RE.test(settings[field])) return `${field} must be a six-digit hex color`;
+  }
+  for (const field of ['inputBackgroundColor', 'inputBorderColor', 'inputTextColor', 'buttonTextColor', 'linkColor', 'linkHoverColor']) {
+    if (settings[field] !== null && settings[field] !== undefined && !HEX_COLOR_RE.test(settings[field])) {
+      return `${field} must be a six-digit hex color or null for automatic coloring`;
     }
   }
   return null;
@@ -200,6 +235,59 @@ router.get('/clients', (req, res, next) => {
   res.json({ clients: listClients() });
 });
 
+// Public branding lookup used by the login, registration, recovery, and
+// consent screens. It intentionally returns presentation settings only.
+router.get('/ui-config', (req, res) => {
+  const requestedClientId = typeof req.query.client_id === 'string' ? req.query.client_id : SYSTEM_CLIENT_ID;
+  const systemClient = getClientById(SYSTEM_CLIENT_ID);
+  const client = getClientByPublicId(requestedClientId) ?? systemClient;
+  if (!client) return res.status(404).json({ error: 'IAM system client is not configured' });
+  res.json({ clientId: client.client_id, settings: getEffectiveUiSettings(client.id) });
+});
+
+// Application branding is platform configuration, so only IAM administrators
+// can edit it. Client applications can read their effective public settings.
+router.get('/clients/:clientId/ui-settings', requireAdmin, resolveClient, (req, res) => {
+  res.json({
+    clientId: req.contextClient.client_id,
+    settings: getEffectiveUiSettings(req.contextClient.id),
+    overrides: getUiSettings(req.contextClient.id),
+  });
+});
+
+router.put('/clients/:clientId/ui-settings', requireAdmin, resolveClient, (req, res) => {
+  const current = getEffectiveUiSettings(req.contextClient.id);
+  const currentOverrides = getUiSettings(req.contextClient.id) ?? {};
+  const settings = {
+    pageTitle: req.body?.pageTitle ?? current.pageTitle,
+    brandName: req.body?.brandName ?? current.brandName,
+    logoText: req.body?.logoText ?? current.logoText,
+    subtitle: req.body?.subtitle ?? current.subtitle,
+    accentColor: req.body?.accentColor ?? current.accentColor,
+    accentStrongColor: req.body?.accentStrongColor ?? current.accentStrongColor,
+    backgroundColor: req.body?.backgroundColor ?? current.backgroundColor,
+    surfaceColor: req.body?.surfaceColor ?? current.surfaceColor,
+    textColor: req.body?.textColor ?? current.textColor,
+    mutedTextColor: req.body?.mutedTextColor ?? current.mutedTextColor,
+  };
+  for (const field of ['inputBackgroundColor', 'inputBorderColor', 'inputTextColor', 'buttonTextColor', 'linkColor', 'linkHoverColor']) {
+    settings[field] = Object.prototype.hasOwnProperty.call(req.body ?? {}, field)
+      ? (req.body[field] || null)
+      : (currentOverrides[field] ?? null);
+  }
+  const error = validateUiSettings(settings);
+  if (error) return res.status(400).json({ error });
+  const updated = upsertUiSettings(req.contextClient.id, settings);
+  recordAuditEvent({ eventType: 'client_ui_settings_updated', clientId: req.contextClient.id });
+  res.json({ clientId: req.contextClient.client_id, settings: getEffectiveUiSettings(req.contextClient.id), overrides: updated });
+});
+
+router.delete('/clients/:clientId/ui-settings', requireAdmin, resolveClient, (req, res) => {
+  deleteUiSettings(req.contextClient.id);
+  recordAuditEvent({ eventType: 'client_ui_settings_reset', clientId: req.contextClient.id });
+  res.status(204).end();
+});
+
 // POST /api/auth/clients (Iam admin) — registers an application
 router.post('/clients', requireAdmin, (req, res) => {
   const { clientId, name, description, secret, redirectUris } = req.body ?? {};
@@ -238,9 +326,12 @@ router.post('/clients', requireAdmin, (req, res) => {
   if (clientType === 'service' && !grantTypes.includes('client_credentials')) {
     return res.status(400).json({ error: 'service clients must allow client_credentials' });
   }
+  if (req.body?.defaultRole !== undefined && req.body.defaultRole !== null && (typeof req.body.defaultRole !== 'string' || !ROLE_NAME_RE.test(req.body.defaultRole))) {
+    return res.status(400).json({ error: 'defaultRole must be a valid role name' });
+  }
 
   const clientSecret = clientType === 'public' ? null : (secret ?? cryptoSecret());
-  const client = createClient({ clientId, name, description, secret: clientSecret, redirectUris, clientType, grantTypes, allowedScopes });
+  const client = createClient({ clientId, name, description, secret: clientSecret, redirectUris, clientType, grantTypes, allowedScopes, defaultRole: req.body?.defaultRole });
   recordAuditEvent({ eventType: 'client_created', clientId: client.id, metadata: { client_id: client.client_id, client_type: clientType } });
   res.status(201).json({ client, ...(clientSecret ? { secret: clientSecret } : {}) });
 });
@@ -252,7 +343,7 @@ router.get('/clients/:clientId', requireAdminOrClient, resolveClient, (req, res)
 
 // PUT /api/auth/clients/:clientId (Iam admin or the client itself)
 router.put('/clients/:clientId', requireAdminOrClient, resolveClient, (req, res) => {
-  const { name, description, redirectUris, clientId, enabled, clientType, grantTypes, allowedScopes } = req.body ?? {};
+  const { name, description, redirectUris, clientId, enabled, clientType, grantTypes, allowedScopes, defaultRole } = req.body ?? {};
   const err = validateRedirectUris(redirectUris);
   if (err) return res.status(400).json({ error: err });
   if (clientId !== undefined) {
@@ -283,6 +374,9 @@ router.put('/clients/:clientId', requireAdminOrClient, resolveClient, (req, res)
   if ((clientType ?? req.contextClient.client_type) === 'public' && nextGrantTypes.includes(TOKEN_EXCHANGE_GRANT)) {
     return res.status(400).json({ error: 'public clients cannot use token exchange' });
   }
+  if (defaultRole !== undefined && defaultRole !== null && (typeof defaultRole !== 'string' || !ROLE_NAME_RE.test(defaultRole))) {
+    return res.status(400).json({ error: 'defaultRole must be a valid role name or null' });
+  }
 
   const result = updateClient(req.contextClient.id, {
     name: name === undefined ? undefined : name.trim(),
@@ -292,6 +386,7 @@ router.put('/clients/:clientId', requireAdminOrClient, resolveClient, (req, res)
     clientType,
     grantTypes,
     allowedScopes,
+    defaultRole,
     enabled,
   });
   if (result?.error) return res.status(400).json({ error: result.error });
@@ -316,9 +411,14 @@ router.delete('/clients/:clientId', (req, res, next) => {
   if (req.authClient) return res.status(403).json({ error: 'Only IAM administrators can delete clients' });
   next();
 }, requireAdminOrClient, resolveClient, (req, res) => {
+  // Keep the public identifier for the audit record, but do not retain the
+  // deleted client's database id. `audit_events.client_id` references
+  // `clients(id)`, so inserting the deleted id would make the successful
+  // deletion fail with a foreign-key error and return HTTP 500.
+  const deletedClientId = req.contextClient.client_id;
   const result = deleteClient(req.contextClient.id);
   if (result.error) return res.status(400).json({ error: result.error });
-  recordAuditEvent({ eventType: 'client_deleted', clientId: req.contextClient.id });
+  recordAuditEvent({ eventType: 'client_deleted', metadata: { client_id: deletedClientId } });
   res.status(204).end();
 });
 
@@ -545,6 +645,83 @@ router.delete('/clients/:clientId/roles/:roleId', requireAdminOrClient, resolveC
 // ---------------------------------------------------------------------------
 // Assignments (user <-> client role)
 // ---------------------------------------------------------------------------
+
+// Application administrators manage identity membership and application roles
+// through this boundary. They never receive the ability to change IAM's own
+// system roles; the identity record remains owned by IAM.
+router.post('/clients/:clientId/users', requireAdminOrClient, resolveClient, (req, res) => {
+  const { username, displayName, email, status, password, roles } = req.body ?? {};
+  if (typeof username !== 'string' || !username.trim() || username.trim() !== username) {
+    return res.status(400).json({ error: 'username is required and cannot contain leading/trailing spaces' });
+  }
+  if (typeof displayName !== 'string' || !displayName.trim()) {
+    return res.status(400).json({ error: 'displayName is required' });
+  }
+  if (typeof email !== 'string' || !email.trim()) {
+    return res.status(400).json({ error: 'email is required' });
+  }
+  if (status !== undefined && !ALLOWED_USER_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `status must be one of: ${ALLOWED_USER_STATUSES.join(', ')}` });
+  }
+  if (password !== undefined && (typeof password !== 'string' || password.length < 8)) {
+    return res.status(400).json({ error: 'password must be a string with at least 8 characters' });
+  }
+  if (roles !== undefined && !Array.isArray(roles)) {
+    return res.status(400).json({ error: 'roles must be an array of role names' });
+  }
+  if (isUsernameTaken(username)) return res.status(409).json({ error: 'username already exists' });
+  if (isEmailTaken(email.trim())) return res.status(409).json({ error: 'email already exists' });
+
+  const validRoles = new Set(listRoles(req.contextClient.id).map((role) => role.name));
+  const requestedRoles = roles ?? (validRoles.has('member') ? ['member'] : []);
+  const invalidRoles = requestedRoles.filter((role) => !validRoles.has(role));
+  if (invalidRoles.length) return res.status(400).json({ error: `invalid role name(s) for client: ${invalidRoles.join(', ')}` });
+
+  const user = createUser({ username, displayName, email: email.trim(), status, password });
+  setUserRolesForClient(user.id, req.contextClient.id, requestedRoles);
+  recordAuditEvent({ eventType: 'application_user_created', userId: user.id, clientId: req.contextClient.id });
+  return res.status(201).json({ user: getUser(user.id, { clientId: req.contextClient.id }) });
+});
+
+router.put('/clients/:clientId/users/:userId', requireAdminOrClient, resolveClient, resolveUserForAssignments, (req, res) => {
+  const { displayName, email, status, password, roles } = req.body ?? {};
+  if (status !== undefined && !ALLOWED_USER_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `status must be one of: ${ALLOWED_USER_STATUSES.join(', ')}` });
+  }
+  if (password !== undefined && password !== '' && (typeof password !== 'string' || password.length < 8)) {
+    return res.status(400).json({ error: 'password must be a string with at least 8 characters' });
+  }
+  if (email !== undefined && (typeof email !== 'string' || !email.trim())) {
+    return res.status(400).json({ error: 'email must be a non-empty string' });
+  }
+  if (email !== undefined && isEmailTaken(email.trim(), req.targetUser.id)) return res.status(409).json({ error: 'email already exists' });
+  if (roles !== undefined && !Array.isArray(roles)) {
+    return res.status(400).json({ error: 'roles must be an array of role names' });
+  }
+  if (roles !== undefined) {
+    const validRoles = new Set(listRoles(req.contextClient.id).map((role) => role.name));
+    const invalidRoles = roles.filter((role) => !validRoles.has(role));
+    if (invalidRoles.length) return res.status(400).json({ error: `invalid role name(s) for client: ${invalidRoles.join(', ')}` });
+  }
+
+  const user = updateUser(req.targetUser.id, {
+    displayName,
+    email: email === undefined ? undefined : email.trim(),
+    status,
+    password: password || undefined,
+  });
+  if (roles !== undefined) setUserRolesForClient(req.targetUser.id, req.contextClient.id, roles);
+  recordAuditEvent({ eventType: 'application_user_updated', userId: req.targetUser.id, clientId: req.contextClient.id });
+  return res.json({ user: getUser(user.id, { clientId: req.contextClient.id }) });
+});
+
+router.delete('/clients/:clientId/users/:userId', requireAdminOrClient, resolveClient, resolveUserForAssignments, (req, res) => {
+  // Removing a user from one application must not delete the central IAM
+  // identity or its memberships in other applications.
+  setUserRolesForClient(req.targetUser.id, req.contextClient.id, []);
+  recordAuditEvent({ eventType: 'application_membership_removed', userId: req.targetUser.id, clientId: req.contextClient.id });
+  return res.status(204).end();
+});
 
 // GET /api/auth/clients/:clientId/users/:userId/roles
 router.get('/clients/:clientId/users/:userId/roles', requireAdminOrClient, resolveClient, resolveUserForAssignments, (req, res) => {

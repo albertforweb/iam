@@ -10,6 +10,28 @@ export const db = new DatabaseSync(DB_PATH);
 
 export const SYSTEM_CLIENT_ID = 'sys_iam';
 
+export const DEFAULT_UI_SETTINGS = Object.freeze({
+  pageTitle: 'IAM',
+  brandName: 'IAM',
+  logoText: 'I',
+  subtitle: 'Access your IAM account',
+  accentColor: '#6366f1',
+  accentStrongColor: '#4f46e5',
+  backgroundColor: '#0b1020',
+  surfaceColor: '#151b30',
+  textColor: '#eef2ff',
+  mutedTextColor: '#9aa7c7',
+});
+
+const UI_COMPONENT_FIELDS = [
+  'inputBackgroundColor',
+  'inputBorderColor',
+  'inputTextColor',
+  'buttonTextColor',
+  'linkColor',
+  'linkHoverColor',
+];
+
 const SESSION_TTL_MS =
   parseInt(process.env.IAM_SESSION_TTL_HOURS ?? '24', 10) * 60 * 60 * 1000;
 const RESET_TTL_MS =
@@ -53,10 +75,34 @@ db.exec(`
     client_type   TEXT NOT NULL DEFAULT 'confidential',
     grant_types   TEXT NOT NULL DEFAULT '["authorization_code","refresh_token"]',
     allowed_scopes TEXT NOT NULL DEFAULT '[]',
+    default_role  TEXT,
     is_system     INTEGER NOT NULL DEFAULT 0,
     enabled       INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS ui_settings (
+    client_id            TEXT PRIMARY KEY,
+    page_title           TEXT NOT NULL DEFAULT 'IAM',
+    brand_name           TEXT NOT NULL DEFAULT 'IAM',
+    logo_text            TEXT NOT NULL DEFAULT 'I',
+    subtitle             TEXT NOT NULL DEFAULT 'Access your IAM account',
+    accent_color         TEXT NOT NULL DEFAULT '#6366f1',
+    accent_strong_color  TEXT NOT NULL DEFAULT '#4f46e5',
+    background_color     TEXT NOT NULL DEFAULT '#0b1020',
+    surface_color        TEXT NOT NULL DEFAULT '#151b30',
+    text_color           TEXT NOT NULL DEFAULT '#eef2ff',
+    muted_text_color     TEXT NOT NULL DEFAULT '#9aa7c7',
+    input_background_color TEXT,
+    input_border_color     TEXT,
+    input_text_color       TEXT,
+    button_text_color      TEXT,
+    link_color             TEXT,
+    link_hover_color       TEXT,
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL,
+    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
   );
 
   CREATE TABLE IF NOT EXISTS delegation_policies (
@@ -221,6 +267,15 @@ function ensureColumn(table, column, definition) {
 ensureColumn('clients', 'client_type', "TEXT NOT NULL DEFAULT 'confidential'");
 ensureColumn('clients', 'grant_types', "TEXT NOT NULL DEFAULT '[\"authorization_code\",\"refresh_token\"]'");
 ensureColumn('clients', 'allowed_scopes', "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('clients', 'default_role', 'TEXT');
+ensureColumn('ui_settings', 'text_color', "TEXT NOT NULL DEFAULT '#eef2ff'");
+ensureColumn('ui_settings', 'muted_text_color', "TEXT NOT NULL DEFAULT '#9aa7c7'");
+ensureColumn('ui_settings', 'input_background_color', 'TEXT');
+ensureColumn('ui_settings', 'input_border_color', 'TEXT');
+ensureColumn('ui_settings', 'input_text_color', 'TEXT');
+ensureColumn('ui_settings', 'button_text_color', 'TEXT');
+ensureColumn('ui_settings', 'link_color', 'TEXT');
+ensureColumn('ui_settings', 'link_hover_color', 'TEXT');
 ensureColumn('oauth_codes', 'code_challenge', 'TEXT');
 ensureColumn('oauth_codes', 'code_challenge_method', 'TEXT');
 ensureColumn('oauth_codes', 'nonce', 'TEXT');
@@ -319,14 +374,46 @@ const stmts = {
   clientByPublicId: db.prepare('SELECT * FROM clients WHERE client_id = ?'),
   listClients: db.prepare('SELECT * FROM clients ORDER BY name'),
   insertClient: db.prepare(`
-    INSERT INTO clients (id, client_id, name, description, secret_hash, redirect_uris, client_type, grant_types, allowed_scopes, is_system, enabled, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO clients (id, client_id, name, description, secret_hash, redirect_uris, client_type, grant_types, allowed_scopes, default_role, is_system, enabled, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateClient: db.prepare(`
-    UPDATE clients SET name = ?, description = ?, redirect_uris = ?, client_type = ?, grant_types = ?, allowed_scopes = ?, enabled = ?, updated_at = ? WHERE id = ?
+    UPDATE clients SET name = ?, description = ?, redirect_uris = ?, client_type = ?, grant_types = ?, allowed_scopes = ?, default_role = ?, enabled = ?, updated_at = ? WHERE id = ?
   `),
   setClientSecret: db.prepare('UPDATE clients SET secret_hash = ?, updated_at = ? WHERE id = ?'),
   deleteClient: db.prepare('DELETE FROM clients WHERE id = ?'),
+
+  // Public IAM branding and UI settings, scoped to a registered client.
+  uiSettingsByClient: db.prepare('SELECT * FROM ui_settings WHERE client_id = ?'),
+  upsertUiSettings: db.prepare(`
+    INSERT INTO ui_settings (
+      client_id, page_title, brand_name, logo_text, subtitle,
+      accent_color, accent_strong_color, background_color, surface_color,
+      text_color, muted_text_color,
+      input_background_color, input_border_color, input_text_color,
+      button_text_color, link_color, link_hover_color,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(client_id) DO UPDATE SET
+      page_title = excluded.page_title,
+      brand_name = excluded.brand_name,
+      logo_text = excluded.logo_text,
+      subtitle = excluded.subtitle,
+      accent_color = excluded.accent_color,
+      accent_strong_color = excluded.accent_strong_color,
+      background_color = excluded.background_color,
+      surface_color = excluded.surface_color,
+      text_color = excluded.text_color,
+      muted_text_color = excluded.muted_text_color,
+      input_background_color = excluded.input_background_color,
+      input_border_color = excluded.input_border_color,
+      input_text_color = excluded.input_text_color,
+      button_text_color = excluded.button_text_color,
+      link_color = excluded.link_color,
+      link_hover_color = excluded.link_hover_color,
+      updated_at = excluded.updated_at
+  `),
+  deleteUiSettings: db.prepare('DELETE FROM ui_settings WHERE client_id = ?'),
 
   // delegated application access
   delegationPolicyBySourceTarget: db.prepare('SELECT * FROM delegation_policies WHERE source_client_id = ? AND target_client_id = ?'),
@@ -388,8 +475,11 @@ const stmts = {
 
   // assignments
   allUserAssignments: db.prepare(`
-    SELECT r.name, r.client_id, ur.context_type, ur.context_id FROM roles r
+    SELECT r.name,
+      CASE WHEN r.client_id = 'sys_iam' THEN 'sys_iam' ELSE COALESCE(c.client_id, r.client_id) END AS client_id,
+      ur.context_type, ur.context_id FROM roles r
     JOIN role_assignments ur ON ur.role_id = r.id
+    LEFT JOIN clients c ON c.id = r.client_id
     WHERE ur.user_id = ? AND (ur.expires_at IS NULL OR ur.expires_at > datetime('now'))
     ORDER BY r.name
   `),
@@ -423,6 +513,14 @@ const stmts = {
 
   // users
   list: db.prepare('SELECT * FROM users ORDER BY created_at'),
+  listByClient: db.prepare(`
+    SELECT DISTINCT u.* FROM users u
+    JOIN role_assignments ur ON ur.user_id = u.id
+    JOIN roles r ON r.id = ur.role_id
+    WHERE r.client_id = ?
+      AND (ur.expires_at IS NULL OR ur.expires_at > datetime('now'))
+    ORDER BY u.created_at
+  `),
   byId: db.prepare('SELECT * FROM users WHERE id = ?'),
   byUsername: db.prepare('SELECT * FROM users WHERE username = ?'),
   byEmail: db.prepare('SELECT * FROM users WHERE email = ?'),
@@ -525,6 +623,7 @@ function ensureSystemClient() {
       'public',
       '[]',
       '[]',
+      null,
       1,
       1,
       now(),
@@ -535,6 +634,12 @@ function ensureSystemClient() {
   db.prepare('UPDATE roles SET client_id = ? WHERE client_id IS NULL').run(SYSTEM_CLIENT_ID);
   db.prepare('UPDATE user_roles SET client_id = ? WHERE client_id IS NULL').run(SYSTEM_CLIENT_ID);
   db.prepare('UPDATE role_assignments SET client_id = ? WHERE client_id IS NULL').run(SYSTEM_CLIENT_ID);
+}
+
+function ensureDefaultUiSettings() {
+  const systemClient = stmts.clientById.get(SYSTEM_CLIENT_ID);
+  if (!systemClient || stmts.uiSettingsByClient.get(systemClient.id)) return;
+  upsertUiSettings(systemClient.id, DEFAULT_UI_SETTINGS);
 }
 
 function ensureDefaultRoles() {
@@ -607,6 +712,111 @@ export function getClientByPublicId(publicId) {
   return toClientDto(stmts.clientByPublicId.get(publicId));
 }
 
+function uiSettingsDto(row) {
+  if (!row) return null;
+  return {
+    pageTitle: row.page_title,
+    brandName: row.brand_name,
+    logoText: row.logo_text,
+    subtitle: row.subtitle,
+    accentColor: row.accent_color,
+    accentStrongColor: row.accent_strong_color,
+    backgroundColor: row.background_color,
+    surfaceColor: row.surface_color,
+    textColor: row.text_color,
+    mutedTextColor: row.muted_text_color,
+    inputBackgroundColor: row.input_background_color ?? null,
+    inputBorderColor: row.input_border_color ?? null,
+    inputTextColor: row.input_text_color ?? null,
+    buttonTextColor: row.button_text_color ?? null,
+    linkColor: row.link_color ?? null,
+    linkHoverColor: row.link_hover_color ?? null,
+    updatedAt: row.updated_at,
+  };
+}
+
+function hexToRgb(value) {
+  if (typeof value !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(value)) return null;
+  return [0, 2, 4].map((offset) => parseInt(value.slice(offset + 1, offset + 3), 16));
+}
+
+function rgbToHex(rgb) {
+  return `#${rgb.map((channel) => Math.max(0, Math.min(255, Math.round(channel))).toString(16).padStart(2, '0')).join('')}`;
+}
+
+function blendColors(first, second, firstWeight = 0.5) {
+  const firstRgb = hexToRgb(first);
+  const secondRgb = hexToRgb(second);
+  if (!firstRgb || !secondRgb) return first;
+  return rgbToHex(firstRgb.map((channel, index) => channel * firstWeight + secondRgb[index] * (1 - firstWeight)));
+}
+
+function contrastColor(value) {
+  const rgb = hexToRgb(value);
+  if (!rgb) return '#ffffff';
+  const luminance = (rgb.map((channel) => {
+    const normalized = channel / 255;
+    return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  }).reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0));
+  return luminance > 0.55 ? '#111827' : '#ffffff';
+}
+
+function deriveUiSettings(settings) {
+  return {
+    ...settings,
+    inputBackgroundColor: settings.inputBackgroundColor ?? blendColors(settings.surfaceColor, settings.backgroundColor, 0.55),
+    inputBorderColor: settings.inputBorderColor ?? blendColors(settings.accentColor, settings.surfaceColor, 0.45),
+    inputTextColor: settings.inputTextColor ?? settings.textColor,
+    buttonTextColor: settings.buttonTextColor ?? contrastColor(settings.accentColor),
+    linkColor: settings.linkColor ?? settings.accentStrongColor,
+    linkHoverColor: settings.linkHoverColor ?? settings.accentColor,
+  };
+}
+
+export function getUiSettings(clientId) {
+  return uiSettingsDto(stmts.uiSettingsByClient.get(clientId));
+}
+
+export function getEffectiveUiSettings(clientId) {
+  const systemClient = stmts.clientById.get(SYSTEM_CLIENT_ID);
+  const systemSettings = systemClient ? uiSettingsDto(stmts.uiSettingsByClient.get(systemClient.id)) : null;
+  const clientSettings = clientId ? uiSettingsDto(stmts.uiSettingsByClient.get(clientId)) : null;
+  const effective = { ...DEFAULT_UI_SETTINGS, ...(systemSettings ?? {}), ...(clientSettings ?? {}) };
+  for (const field of UI_COMPONENT_FIELDS) {
+    if (clientSettings && clientSettings[field] === null) effective[field] = null;
+    else if (clientSettings?.[field]) effective[field] = clientSettings[field];
+    else if (systemSettings?.[field]) effective[field] = systemSettings[field];
+  }
+  return deriveUiSettings(effective);
+}
+
+export function upsertUiSettings(clientId, settings) {
+  const values = { ...DEFAULT_UI_SETTINGS, ...(settings ?? {}) };
+  const timestamp = now();
+  const existing = stmts.uiSettingsByClient.get(clientId);
+  stmts.upsertUiSettings.run(
+    clientId,
+    values.pageTitle,
+    values.brandName,
+    values.logoText,
+    values.subtitle,
+    values.accentColor,
+    values.accentStrongColor,
+    values.backgroundColor,
+    values.surfaceColor,
+    values.textColor,
+    values.mutedTextColor,
+    ...UI_COMPONENT_FIELDS.map((field) => values[field] ?? null),
+    existing?.created_at ?? timestamp,
+    timestamp,
+  );
+  return getUiSettings(clientId);
+}
+
+export function deleteUiSettings(clientId) {
+  return stmts.deleteUiSettings.run(clientId).changes > 0;
+}
+
 export function verifyClientSecret(publicId, secret) {
   const client = stmts.clientByPublicId.get(publicId);
   if (!client || !client.enabled) return null;
@@ -614,7 +824,7 @@ export function verifyClientSecret(publicId, secret) {
   return toClientDto(client);
 }
 
-export function createClient({ clientId, name, description, secret, redirectUris, clientType, grantTypes, allowedScopes }) {
+export function createClient({ clientId, name, description, secret, redirectUris, clientType, grantTypes, allowedScopes, defaultRole }) {
   const client = {
     id: crypto.randomUUID(),
     client_id: clientId.trim(),
@@ -625,6 +835,7 @@ export function createClient({ clientId, name, description, secret, redirectUris
     client_type: clientType ?? 'confidential',
     grant_types: JSON.stringify(grantTypes ?? ['authorization_code', 'refresh_token']),
     allowed_scopes: JSON.stringify(allowedScopes ?? []),
+    default_role: defaultRole ?? null,
     is_system: 0,
     enabled: 1,
     created_at: now(),
@@ -640,6 +851,7 @@ export function createClient({ clientId, name, description, secret, redirectUris
     client.client_type,
     client.grant_types,
     client.allowed_scopes,
+    client.default_role,
     client.is_system,
     client.enabled,
     client.created_at,
@@ -648,7 +860,7 @@ export function createClient({ clientId, name, description, secret, redirectUris
   return toClientDto(client);
 }
 
-export function updateClient(id, { name, description, redirectUris, clientId, clientType, grantTypes, allowedScopes, enabled }) {
+export function updateClient(id, { name, description, redirectUris, clientId, clientType, grantTypes, allowedScopes, defaultRole, enabled }) {
   const row = stmts.clientById.get(id);
   if (!row) return null;
   if (clientId && row.is_system) return { error: 'Cannot change the system client identifier' };
@@ -663,6 +875,7 @@ export function updateClient(id, { name, description, redirectUris, clientId, cl
     clientType ?? row.client_type,
     grantTypes !== undefined ? JSON.stringify(grantTypes) : row.grant_types,
     allowedScopes !== undefined ? JSON.stringify(allowedScopes) : row.allowed_scopes,
+    defaultRole !== undefined ? (defaultRole || null) : row.default_role,
     enabled !== undefined ? (enabled ? 1 : 0) : row.enabled,
     now(),
     id,
@@ -681,11 +894,17 @@ export function rotateClientSecret(id) {
   return { secret };
 }
 
+export function clearClientSecret(id) {
+  const row = stmts.clientById.get(id);
+  if (!row) return null;
+  stmts.setClientSecret.run(null, now(), id);
+  return getClientById(id);
+}
+
 export function deleteClient(id) {
   const row = stmts.clientById.get(id);
   if (!row) return { error: 'Client not found' };
   if (row.is_system) return { error: 'Cannot delete the system client' };
-  stmts.deleteUserOauthTokens.run(null);
   stmts.deleteClientOauthTokens.run(id);
   return { ok: stmts.deleteClient.run(id).changes > 0 };
 }
@@ -823,6 +1042,7 @@ export function reconcileAuthorizationManifest({ clientId, version, permissions,
       client.client_type,
       client.grant_types,
       JSON.stringify(allowedScopes),
+      client.default_role,
       client.enabled,
       timestamp,
       clientId,
@@ -1006,6 +1226,24 @@ export function setUserRolesForClient(userId, clientId, roleNames, context) {
   return toUserDto(stmts.byId.get(userId), { clientId, contextType, contextId });
 }
 
+/**
+ * Provision the application's default role only when the user has no role in
+ * that application/context yet. This keeps the application's RBAC policy in
+ * the application-owned manifest while allowing IAM to perform safe JIT
+ * membership provisioning during authorization.
+ */
+export function ensureDefaultRoleForClient(userId, clientId, roleName, context) {
+  if (!roleName) return { assigned: false, roles: getUserRolesForClient(userId, clientId, context) };
+  const existing = getUserRolesForClient(userId, clientId, context);
+  if (existing.length) return { assigned: false, roles: existing };
+
+  const { contextType, contextId } = assignmentContext(context);
+  const role = stmts.roleByNameInClient.get(clientId, roleName);
+  if (!role) return { assigned: false, roles: [], error: `Default role is not defined for client: ${roleName}` };
+  stmts.assignRole.run(crypto.randomUUID(), userId, role.id, clientId, contextType, contextId, now());
+  return { assigned: true, roles: getUserRolesForClient(userId, clientId, context) };
+}
+
 export function setUserRoles(userId, roles) {
   return setUserRolesForClient(userId, SYSTEM_CLIENT_ID, roles);
 }
@@ -1022,8 +1260,9 @@ export function getAllUserGrants(userId) {
 // Users
 // ---------------------------------------------------------------------------
 
-export function listUsers() {
-  return stmts.list.all().map((row) => toUserDto(row));
+export function listUsers(clientId = SYSTEM_CLIENT_ID) {
+  const rows = clientId === SYSTEM_CLIENT_ID ? stmts.list.all() : stmts.listByClient.all(clientId);
+  return rows.map((row) => toUserDto(row, { clientId }));
 }
 
 export function getUser(id, opts) {
@@ -1124,14 +1363,28 @@ export function changePassword(userId, current, next) {
   return { ok: true };
 }
 
-export function createResetTokenForUsername(username) {
-  const row = stmts.byUsername.get(username);
-  if (!row || !row.email || !row.password_hash) return null;
+export function createResetTokenForUsername(username, { allowWithoutEmail = false } = {}) {
+  return createResetTokenForRow(stmts.byUsername.get(username), { allowWithoutEmail });
+}
+
+export function createResetTokenForEmail(email, { allowWithoutEmail = false } = {}) {
+  return createResetTokenForRow(stmts.byEmail.get(email), { allowWithoutEmail });
+}
+
+function createResetTokenForRow(row, { allowWithoutEmail = false } = {}) {
+  // Production recovery normally needs an email (or another configured
+  // delivery channel). Local development has no mail service, so allowing a
+  // token for an email-less account lets the dev UI complete the reset flow.
+  if (!row || (!row.email && !allowWithoutEmail) || !row.password_hash) return null;
   const token = crypto.randomBytes(32).toString('base64url');
   const created = new Date();
   const expires = new Date(created.getTime() + RESET_TTL_MS);
   stmts.insertResetToken.run(token, row.id, created.toISOString(), expires.toISOString());
   return { token, expiresAt: expires.toISOString(), userId: row.id, username: row.username, email: row.email };
+}
+
+export function deleteResetToken(token) {
+  return stmts.deleteResetToken.run(token).changes > 0;
 }
 
 export function resetPasswordByToken(token, username, newPlain) {
@@ -1300,27 +1553,38 @@ export function cleanupOauth() {
 
 export function bootstrapAdmin() {
   ensureSystemClient();
+  ensureDefaultUiSettings();
   ensureDefaultRoles();
   ensureIntegrityTriggers();
   ensureSystemClient();
 
   const username = (process.env.IAM_ADMIN_USERNAME ?? 'admin').trim();
+  const configuredEmail = (process.env.IAM_ADMIN_EMAIL ?? '').trim();
   const existing = getUserByUsername(username);
   if (existing && !getUserRolesForClient(existing.id, SYSTEM_CLIENT_ID).length) {
     setUserRoles(existing.id, ['admin']);
     console.log(`[bootstrap] Granted "admin" role to existing user "${username}"`);
   }
-  if (existing) return false;
+  if (existing) {
+    if (configuredEmail && existing.email !== configuredEmail) {
+      updateUser(existing.id, { email: configuredEmail });
+      console.log(`[bootstrap] Updated recovery email for administrator "${username}"`);
+    }
+    return false;
+  }
 
   const configuredPassword = process.env.IAM_ADMIN_PASSWORD;
   if (process.env.NODE_ENV === 'production' && (!configuredPassword || configuredPassword.length < 12)) {
     throw new Error('IAM_ADMIN_PASSWORD must be configured with at least 12 characters in production');
   }
+  if (process.env.NODE_ENV === 'production' && !configuredEmail) {
+    throw new Error('IAM_ADMIN_EMAIL must be configured in production');
+  }
 
   const user = createUser({
     username,
     displayName: 'Administrator',
-    email: null,
+    email: configuredEmail || null,
     status: 'active',
     password: configuredPassword ?? 'admin123',
     roles: ['admin'],

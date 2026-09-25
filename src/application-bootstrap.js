@@ -6,7 +6,11 @@ import {
   createClient,
   getClientByPublicId,
   updateClient,
+  clearClientSecret,
   verifyClientSecret,
+  reconcileAuthorizationManifest,
+  getUserByUsername,
+  setUserRolesForClient,
   recordAuditEvent,
 } from './db.js';
 
@@ -16,6 +20,7 @@ export const DEFAULT_VAULTS_FILE = path.join(ROOT_DIR, '.vaults');
 
 const CLIENT_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const PERMISSION_RE = /^[A-Za-z0-9_:.-]{1,80}$/;
+const ROLE_RE = /^[A-Za-z0-9_-]{1,50}$/;
 const GRANTS = new Set(['authorization_code', 'refresh_token', 'client_credentials', 'urn:ietf:params:oauth:grant-type:token-exchange']);
 
 function readJson(filePath, fallback) {
@@ -44,8 +49,8 @@ function validateApplications(config) {
     if (typeof application.name !== 'string' || !application.name.trim() || application.name.length > 100) {
       throw new Error(`Application name is invalid: ${clientId}`);
     }
-    if (!['confidential', 'service'].includes(application.clientType)) {
-      throw new Error(`Application ${clientId} must be confidential or service type`);
+    if (!['public', 'confidential', 'service'].includes(application.clientType)) {
+      throw new Error(`Application ${clientId} must be public, confidential, or service type`);
     }
     if (!Array.isArray(application.grantTypes) || application.grantTypes.length === 0 || application.grantTypes.some((grant) => !GRANTS.has(grant))) {
       throw new Error(`Application grantTypes are invalid: ${clientId}`);
@@ -53,8 +58,20 @@ function validateApplications(config) {
     if (application.clientType === 'service' && !application.grantTypes.includes('client_credentials')) {
       throw new Error(`Service application ${clientId} must allow client_credentials`);
     }
+    if (application.clientType === 'public' && application.grantTypes.some((grant) => !['authorization_code', 'refresh_token'].includes(grant))) {
+      throw new Error(`Public application ${clientId} may only allow authorization_code and refresh_token`);
+    }
     if (application.allowedScopes !== undefined && (!Array.isArray(application.allowedScopes) || application.allowedScopes.some((scope) => typeof scope !== 'string' || !PERMISSION_RE.test(scope)))) {
       throw new Error(`Application allowedScopes are invalid: ${clientId}`);
+    }
+    if (application.authorizationManifestFile !== undefined && (typeof application.authorizationManifestFile !== 'string' || !application.authorizationManifestFile.trim())) {
+      throw new Error(`Application authorizationManifestFile is invalid: ${clientId}`);
+    }
+    if (application.defaultRole !== undefined && (typeof application.defaultRole !== 'string' || !ROLE_RE.test(application.defaultRole))) {
+      throw new Error(`Application defaultRole is invalid: ${clientId}`);
+    }
+    if (application.initialRoleAssignments !== undefined && (!Array.isArray(application.initialRoleAssignments) || application.initialRoleAssignments.some((assignment) => typeof assignment?.username !== 'string' || !Array.isArray(assignment?.roles)))) {
+      throw new Error(`Application initialRoleAssignments are invalid: ${clientId}`);
     }
     if (application.secret !== undefined) {
       throw new Error(`Do not put secrets in the application config; use ${DEFAULT_VAULTS_FILE}`);
@@ -67,6 +84,9 @@ function validateApplications(config) {
       grantTypes: [...application.grantTypes],
       ...(application.allowedScopes !== undefined ? { allowedScopes: [...new Set(application.allowedScopes)] } : {}),
       ...(application.redirectUris !== undefined ? { redirectUris: application.redirectUris } : {}),
+      ...(application.authorizationManifestFile ? { authorizationManifestFile: application.authorizationManifestFile.trim() } : {}),
+      ...(application.defaultRole !== undefined ? { defaultRole: application.defaultRole } : {}),
+      ...(application.initialRoleAssignments ? { initialRoleAssignments: application.initialRoleAssignments } : {}),
     };
   });
 }
@@ -122,11 +142,16 @@ export function bootstrapConfiguredApplications({
     let client;
     let secret = storedSecret;
     if (existing) {
-      if (!secret) {
-        throw new Error(`Vault secret is missing for existing client ${application.clientId}`);
-      }
-      if (!verifyClientSecret(application.clientId, secret)) {
-        throw new Error(`Vault secret does not match existing client ${application.clientId}`);
+      if (application.clientType !== 'public') {
+        if (!secret) {
+          throw new Error(`Vault secret is missing for existing client ${application.clientId}`);
+        }
+        if (!verifyClientSecret(application.clientId, secret)) {
+          throw new Error(`Vault secret does not match existing client ${application.clientId}`);
+        }
+      } else {
+        secret = null;
+        if (existing.has_secret) clearClientSecret(existing.id);
       }
       client = updateClient(existing.id, {
         name: application.name,
@@ -135,6 +160,7 @@ export function bootstrapConfiguredApplications({
         grantTypes: application.grantTypes,
         allowedScopes: application.allowedScopes,
         redirectUris: application.redirectUris,
+        defaultRole: application.defaultRole,
       });
     } else {
       secret ??= generateSecret();
@@ -142,11 +168,12 @@ export function bootstrapConfiguredApplications({
         clientId: application.clientId,
         name: application.name,
         description: application.description,
-        secret,
+        secret: application.clientType === 'public' ? null : secret,
         clientType: application.clientType,
         grantTypes: application.grantTypes,
         allowedScopes: application.allowedScopes ?? [],
         redirectUris: application.redirectUris ?? [],
+        defaultRole: application.defaultRole,
       });
       changed = true;
       recordAuditEvent({
@@ -156,9 +183,25 @@ export function bootstrapConfiguredApplications({
       });
     }
 
-    if (!vaultEntry || vaultEntry.clientSecret !== secret) {
+    if (application.clientType === 'public' && vaultEntry) {
+      delete vault.clients[application.clientId];
+      changed = true;
+    } else if (application.clientType !== 'public' && (!vaultEntry || vaultEntry.clientSecret !== secret)) {
       vault.clients[application.clientId] = { clientId: application.clientId, clientSecret: secret };
       changed = true;
+    }
+
+    if (application.authorizationManifestFile) {
+      const manifest = readJson(application.authorizationManifestFile, null);
+      if (!manifest) throw new Error(`Authorization manifest is missing: ${application.authorizationManifestFile}`);
+      const result = reconcileAuthorizationManifest({ clientId: client.id, ...manifest });
+      if (result?.error) throw new Error(`Authorization manifest failed for ${application.clientId}: ${result.error}`);
+    }
+
+    for (const assignment of application.initialRoleAssignments ?? []) {
+      const user = getUserByUsername(assignment.username);
+      if (!user) continue;
+      setUserRolesForClient(user.id, client.id, assignment.roles);
     }
     // Never return bootstrap secrets to callers; they are persisted only in the
     // protected vault file and are not needed by the IAM process after startup.

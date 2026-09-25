@@ -1,4 +1,4 @@
-import { createSession, getSession, SYSTEM_CLIENT_ID, verifyClientSecret, getUserRolesForClient } from './db.js';
+import { createSession, getSession, getOauthToken, getUser, getClientById, SYSTEM_CLIENT_ID, verifyClientSecret, getUserRolesForClient, getClientByPublicId } from './db.js';
 import { incrementMetric } from './observability.js';
 
 export const COOKIE_NAME = 'auth_token';
@@ -41,10 +41,18 @@ export function authUser(res, user) {
 }
 
 export function requireAuth(req, res, next) {
-  const token = req.cookies?.[COOKIE_NAME];
-  const user = token ? getSession(token) : null;
+  const bearer = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const oauth = bearer ? getOauthToken(bearer) : null;
+  const bearerUser = oauth?.kind === 'access' && oauth.user_id ? getUser(oauth.user_id) : null;
+  const cookieToken = req.cookies?.[COOKIE_NAME];
+  const cookieUser = cookieToken ? getSession(cookieToken) : null;
+  const user = bearer ? bearerUser : cookieUser;
   if (!user) return res.status(401).json({ error: 'Not authenticated' });
   req.user = user;
+  if (oauth?.kind === 'access') {
+    req.oauthToken = oauth;
+    req.authClient = getClientById(oauth.audience_client_id ?? oauth.client_id);
+  }
   next();
 }
 
@@ -98,15 +106,25 @@ export function requireClientAuth(req, res, next) {
  * Sets req.user and/or req.authClient accordingly.
  */
 export function requireAdminOrClient(req, res, next) {
-  const sessionUser = (() => {
+  const bearer = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+  const oauth = bearer ? getOauthToken(bearer) : null;
+  const bearerUser = oauth?.kind === 'access' && oauth.user_id ? getUser(oauth.user_id) : null;
+  const sessionUser = bearer ? bearerUser : (() => {
     const token = req.cookies?.[COOKIE_NAME];
     return token ? getSession(token) : null;
   })();
 
   if (sessionUser) {
-    const isAdmin = getUserRolesForClient(sessionUser.id, SYSTEM_CLIENT_ID).includes('admin');
-    if (!isAdmin) return res.status(403).json({ error: 'Forbidden: insufficient role' });
+    const isSystemAdmin = getUserRolesForClient(sessionUser.id, SYSTEM_CLIENT_ID).includes('admin');
+    const requestedClient = req.params?.clientId ? getClientByPublicId(req.params.clientId) : null;
+    const isApplicationAdmin = requestedClient
+      && getUserRolesForClient(sessionUser.id, requestedClient.id).includes('admin');
+    if (!isSystemAdmin && !isApplicationAdmin) return res.status(403).json({ error: 'Forbidden: insufficient role' });
     req.user = sessionUser;
+    if (oauth?.kind === 'access') {
+      req.oauthToken = oauth;
+      req.authClient = getClientById(oauth.audience_client_id ?? oauth.client_id);
+    }
     return next();
   }
 

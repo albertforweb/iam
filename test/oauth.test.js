@@ -11,10 +11,12 @@ process.env.IAM_UI_ENABLED = 'false';
 process.env.IAM_ADMIN_PASSWORD = 'test-admin-password-123';
 process.env.IAM_OAUTH_REQUIRE_PKCE = 'true';
 process.env.IAM_OIDC_KEY_FILE = path.join(tempDir, 'oidc.key');
+process.env.IAM_DEV_MODE = 'true';
 
 const { createApp } = await import('../src/app.js');
 const {
   createClient,
+  updateClient,
   createPermission,
   createRole,
   setRolePermissions,
@@ -22,6 +24,7 @@ const {
   setUserRolesForClient,
   getUserRolesForClient,
   userPermissionsForClient,
+  ensureDefaultRoleForClient,
   createDelegationPolicy,
   getClientByPublicId,
   verifyClientSecret,
@@ -74,6 +77,188 @@ const server = await new Promise((resolve) => {
 });
 const base = `http://127.0.0.1:${server.address().port}`;
 
+test('supports local password recovery for an email-less account', async () => {
+  createUser({
+    username: 'recovery-user',
+    displayName: 'Recovery User',
+    password: 'old-password-123',
+    roles: [],
+  });
+
+  const request = await fetch(`${base}/v1/forgot-password`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'recovery-user' }),
+  });
+  assert.equal(request.status, 200);
+  const recovery = await request.json();
+  assert.ok(recovery.resetToken);
+  assert.equal(recovery.username, 'recovery-user');
+
+  const reset = await fetch(`${base}/v1/reset-password`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      username: recovery.username,
+      token: recovery.resetToken,
+      newPassword: 'new-password-123',
+    }),
+  });
+  assert.equal(reset.status, 200);
+
+  const login = await fetch(`${base}/v1/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'recovery-user', password: 'new-password-123' }),
+  });
+  assert.equal(login.status, 200);
+});
+
+test('lists IAM users for an authenticated system administrator', async () => {
+  const login = await fetch(`${base}/v1/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'test-admin-password-123' }),
+  });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
+  assert.ok(cookie);
+
+  const response = await fetch(`${base}/v1/users`, { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.ok(body.users.some((item) => item.username === 'admin'));
+  assert.ok(body.users.some((item) => item.username === 'test-user'));
+});
+
+test('deletes an application client and records the audit event without a foreign-key failure', async () => {
+  const disposable = createClient({
+    clientId: 'delete-test-app',
+    name: 'Delete Test App',
+    secret: 'delete-test-app-secret-123',
+    clientType: 'confidential',
+    grantTypes: ['client_credentials'],
+    allowedScopes: [],
+  });
+
+  const login = await fetch(`${base}/v1/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'test-admin-password-123' }),
+  });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
+  assert.ok(cookie);
+
+  const response = await fetch(`${base}/v1/clients/${disposable.client_id}`, {
+    method: 'DELETE',
+    headers: { Cookie: cookie },
+  });
+  assert.equal(response.status, 204);
+  assert.equal(await response.text(), '');
+  assert.equal(getClientByPublicId(disposable.client_id), null);
+});
+
+test('supports application-scoped public UI branding', async () => {
+  const initial = await fetch(`${base}/v1/ui-config?client_id=${client.client_id}`);
+  assert.equal(initial.status, 200);
+  assert.equal((await initial.json()).settings.brandName, 'IAM');
+
+  const login = await fetch(`${base}/v1/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'test-admin-password-123' }),
+  });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
+  assert.ok(cookie);
+
+  const update = await fetch(`${base}/v1/clients/${client.client_id}/ui-settings`, {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      pageTitle: 'Reports Portal',
+      brandName: 'Reports',
+      logoText: 'R',
+      subtitle: 'Sign in to Reports',
+      accentColor: '#22c55e',
+      accentStrongColor: '#16a34a',
+      backgroundColor: '#07130b',
+      surfaceColor: '#102619',
+      textColor: '#f0fdf4',
+      mutedTextColor: '#bbf7d0',
+      inputBackgroundColor: '#0b1f12',
+      inputBorderColor: '#22c55e',
+      inputTextColor: '#ecfdf5',
+      buttonTextColor: '#052e16',
+      linkColor: '#86efac',
+      linkHoverColor: '#4ade80',
+    }),
+  });
+  assert.equal(update.status, 200);
+
+  const branded = await fetch(`${base}/v1/ui-config?client_id=${client.client_id}`);
+  assert.equal(branded.status, 200);
+  const brandedSettings = (await branded.json()).settings;
+  assert.equal(brandedSettings.brandName, 'Reports');
+  assert.equal(brandedSettings.textColor, '#f0fdf4');
+  assert.equal(brandedSettings.inputBackgroundColor, '#0b1f12');
+  assert.equal(brandedSettings.linkHoverColor, '#4ade80');
+
+  const consentQuery = new URLSearchParams({
+    response_type: 'code',
+    client_id: client.client_id,
+    redirect_uri: 'http://127.0.0.1/callback',
+    scope: 'openid profile email',
+    state: 'theme-state',
+    nonce: 'theme-nonce',
+    code_challenge: crypto.createHash('sha256').update('theme-verifier-abcdefghijklmnopqrstuvwxyz-1234567890').digest('base64url'),
+    code_challenge_method: 'S256',
+  });
+  const authorize = await fetch(`${base}/oauth/authorize?${consentQuery}`, {
+    headers: { Cookie: cookie },
+    redirect: 'manual',
+  });
+  assert.equal(authorize.status, 302);
+  const consentUrl = new URL(authorize.headers.get('location'), base);
+  const consentPage = await fetch(consentUrl, { headers: { Cookie: cookie } });
+  assert.equal(consentPage.status, 200);
+  const consentHtml = await consentPage.text();
+  assert.match(consentHtml, /Reports/);
+  assert.match(consentHtml, /#07130b/);
+  assert.match(consentHtml, /#22c55e/);
+
+  const reset = await fetch(`${base}/v1/clients/${client.client_id}/ui-settings`, {
+    method: 'DELETE', headers: { Cookie: cookie },
+  });
+  assert.equal(reset.status, 204);
+
+  const systemClient = getClientByPublicId('iam');
+  assert.ok(systemClient?.is_system);
+  const systemUpdate = await fetch(`${base}/v1/clients/${systemClient.client_id}/ui-settings`, {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      pageTitle: 'Custom IAM',
+      brandName: 'Custom IAM',
+      logoText: 'C',
+      subtitle: 'Custom sign in',
+      accentColor: '#ef4444',
+      accentStrongColor: '#dc2626',
+      backgroundColor: '#1c0707',
+      surfaceColor: '#2b1010',
+    }),
+  });
+  assert.equal(systemUpdate.status, 200);
+
+  const systemReset = await fetch(`${base}/v1/clients/${systemClient.client_id}/ui-settings`, {
+    method: 'DELETE', headers: { Cookie: cookie },
+  });
+  assert.equal(systemReset.status, 204);
+  const systemDefaults = await fetch(`${base}/v1/ui-config?client_id=sys_iam`);
+  assert.equal((await systemDefaults.json()).settings.brandName, 'IAM');
+});
+
 test('publishes OIDC discovery and rejects unconfigured CORS origins', async () => {
   const discoveryResponse = await fetch(`${base}/.well-known/openid-configuration`);
   assert.equal(discoveryResponse.status, 200);
@@ -113,6 +298,119 @@ test('bootstraps configured applications and preserves vault secrets across rest
   assert.equal(second.changed, false);
   assert.equal(second.applications[0].created, false);
   assert.ok(getClientByPublicId('bootstrap-app'));
+});
+
+test('bootstraps public PKCE applications without a client secret', () => {
+  const configPath = path.join(tempDir, 'public-applications.json');
+  const vaultPath = path.join(tempDir, 'public.vaults');
+  fs.writeFileSync(configPath, JSON.stringify({
+    applications: [{
+      clientId: 'public-app',
+      name: 'Public App',
+      clientType: 'public',
+      grantTypes: ['authorization_code', 'refresh_token'],
+      redirectUris: ['http://127.0.0.1/login.html'],
+      allowedScopes: ['public:read'],
+    }],
+  }));
+
+  const result = bootstrapConfiguredApplications({ configPath, vaultPath });
+  const publicClient = getClientByPublicId('public-app');
+  assert.equal(result.applications[0].created, true);
+  assert.equal(publicClient.client_type, 'public');
+  assert.equal(publicClient.has_secret, false);
+  assert.deepEqual(publicClient.redirect_uris, ['http://127.0.0.1/login.html']);
+  assert.equal(fs.existsSync(vaultPath), true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(vaultPath, 'utf8')).clients, {});
+});
+
+test('provisions an application default role only for users without an app role', () => {
+  const provisionedUser = createUser({
+    username: 'default-role-user',
+    displayName: 'Default Role User',
+    email: 'default-role-user@example.test',
+    password: 'default-role-password',
+    roles: [],
+  });
+  updateClient(client.id, { defaultRole: 'reader' });
+
+  const first = ensureDefaultRoleForClient(provisionedUser.id, client.id, 'reader');
+  assert.equal(first.assigned, true);
+  assert.deepEqual(first.roles, ['reader']);
+
+  const second = ensureDefaultRoleForClient(provisionedUser.id, client.id, 'reader');
+  assert.equal(second.assigned, false);
+  assert.deepEqual(second.roles, ['reader']);
+});
+
+test('provisions the default role during first authorization and returns app claims', async () => {
+  updateClient(client.id, { defaultRole: 'reader' });
+  const jitUser = createUser({
+    username: 'jit-user',
+    displayName: 'JIT User',
+    email: 'jit-user@example.test',
+    password: 'jit-user-password',
+    roles: [],
+  });
+  const login = await fetch(`${base}/v1/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: jitUser.username, password: 'jit-user-password' }),
+  });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('set-cookie')?.split(';')[0];
+  assert.ok(cookie);
+
+  const verifier = 'jit-verifier-abcdefghijklmnopqrstuvwxyz-1234567890';
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+  const authorizeUrl = new URL(`${base}/oauth/authorize`);
+  authorizeUrl.search = new URLSearchParams({
+    response_type: 'code',
+    client_id: client.client_id,
+    redirect_uri: 'http://127.0.0.1/callback',
+    scope: 'openid profile reports:read',
+    state: 'jit-state',
+    nonce: 'jit-nonce',
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+  });
+  const authorize = await fetch(authorizeUrl, { headers: { Cookie: cookie }, redirect: 'manual' });
+  assert.equal(authorize.status, 302);
+  const consentUrl = new URL(authorize.headers.get('location'), base);
+  assert.equal(consentUrl.pathname, '/oauth/consent');
+  const consent = await fetch(consentUrl, {
+    method: 'POST',
+    headers: { Cookie: cookie, 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ request: consentUrl.searchParams.get('request'), decision: 'allow' }),
+    redirect: 'manual',
+  });
+  assert.equal(consent.status, 302);
+
+  const callback = new URL(consent.headers.get('location'));
+  const token = await fetch(`${base}/oauth/token`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${client.client_id}:test-client-secret-123`).toString('base64')}`,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: callback.searchParams.get('code'),
+      redirect_uri: 'http://127.0.0.1/callback',
+      code_verifier: verifier,
+    }),
+  });
+  assert.equal(token.status, 200);
+  const tokens = await token.json();
+  assert.match(tokens.scope, /reports:read/);
+
+  const userinfo = await fetch(`${base}/oauth/userinfo`, {
+    headers: { Authorization: `Bearer ${tokens.access_token}` },
+  });
+  assert.equal(userinfo.status, 200);
+  const claims = await userinfo.json();
+  assert.deepEqual(claims.roles, ['reader']);
+  assert.deepEqual(claims.permissions, ['reports:read']);
 });
 
 test('does not allow an application credential to register another client', async () => {

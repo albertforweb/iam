@@ -1,6 +1,26 @@
 (function () {
   'use strict';
 
+  const UI_BASE_PATH = window.IAM_UI_BASE_PATH ?? (
+    location.pathname === '/iam' || location.pathname.startsWith('/iam/') ? '/iam' : ''
+  );
+  const UI_ROOT_PATH = UI_BASE_PATH ? `${UI_BASE_PATH}/` : '/';
+  const UI_LOGIN_PATH = UI_BASE_PATH ? `${UI_BASE_PATH}/login` : '/login';
+  const AUTH_NEXT = new URLSearchParams(location.search).get('next');
+
+  function safeRecoveryReturnTo(value) {
+    if (typeof value !== 'string' || !value || value.length > 4096 || value.includes('\\')) return '';
+    if (!value.startsWith('/') || value.startsWith('//')) return '';
+    try {
+      const parsed = new URL(value, location.origin);
+      return `${parsed.pathname}${parsed.search}`;
+    } catch {
+      return '';
+    }
+  }
+
+  let recoveryReturnTo = safeRecoveryReturnTo(AUTH_NEXT);
+
   const state = {
     me: null,
     users: [],
@@ -12,6 +32,8 @@
     appRoles: [],
     roleDetail: null,
     delegations: {},
+    uiSettings: null,
+    uiOverrides: null,
     query: '',
   };
 
@@ -28,9 +50,9 @@
     $('#sidebarAvatar').textContent = IAM.initials(name);
   }
 
-  function normalizeUrl() {
-    if (location.pathname !== '/index.html' || location.search || location.hash) {
-      window.history.replaceState(null, '', '/index.html');
+  function normalizeUrl(targetPath = UI_ROOT_PATH) {
+    if (location.pathname !== targetPath || location.search || location.hash) {
+      window.history.replaceState(null, '', targetPath);
     }
   }
 
@@ -41,13 +63,14 @@
   }
 
   function showAuthScreen(screen = 'login', message = '') {
-    normalizeUrl();
+    normalizeUrl(UI_LOGIN_PATH);
     $('#authView').hidden = false;
     $('#consoleShell').hidden = true;
     $$('.auth-panel').forEach((panel) => { panel.hidden = panel.dataset.authScreenPanel !== screen; });
     ['login', 'signup', 'forgot', 'reset'].forEach((name) => showMessage(`${name}Message`, ''));
     if (message) showMessage(`${screen}Message`, message, 'ok');
-    document.title = screen === 'login' ? 'IAM - Sign in' : `IAM - ${screen[0].toUpperCase()}${screen.slice(1)}`;
+    const pageTitle = IAM_UI_SETTINGS?.pageTitle || IAM_UI_SETTINGS?.brandName || 'IAM';
+    document.title = screen === 'login' ? pageTitle : `${pageTitle} - ${screen[0].toUpperCase()}${screen.slice(1)}`;
     document.body.classList.remove('is-loading');
   }
 
@@ -74,7 +97,7 @@
   }
 
   function showProfile(user) {
-    normalizeUrl();
+    normalizeUrl(UI_ROOT_PATH);
     state.me = user;
     syncSidebarIdentity();
     fillProfile(user);
@@ -83,25 +106,29 @@
     const isAdmin = (user.roles || []).includes('admin');
     $('#adminNavLabel').hidden = !isAdmin;
     $('#adminNavigation').hidden = !isAdmin;
+    $('#settingsNavLabel').hidden = !isAdmin;
+    $('#settingsNavigation').hidden = !isAdmin;
     $('#adminTopbarActions').hidden = !isAdmin;
     $('#accountNavLabel').hidden = false;
     $('#accountNavigation').hidden = false;
-    document.title = 'IAM - Profile';
+    document.title = `${IAM_UI_SETTINGS?.brandName || 'IAM'} - Profile`;
     document.body.classList.remove('is-loading');
     setView('profile');
   }
 
   async function showAdmin() {
-    normalizeUrl();
+    normalizeUrl(UI_ROOT_PATH);
     syncSidebarIdentity();
     $('#authView').hidden = true;
     $('#consoleShell').hidden = false;
     $('#adminNavLabel').hidden = false;
     $('#adminNavigation').hidden = false;
+    $('#settingsNavLabel').hidden = false;
+    $('#settingsNavigation').hidden = false;
     $('#adminTopbarActions').hidden = false;
     $('#accountNavLabel').hidden = false;
     $('#accountNavigation').hidden = false;
-    document.title = 'IAM Console';
+    document.title = `${IAM_UI_SETTINGS?.brandName || 'IAM'} Console`;
     document.body.classList.remove('is-loading');
     fillProfile(state.me);
     setView(state.view && !['profile', 'password'].includes(state.view) ? state.view : 'overview');
@@ -134,6 +161,10 @@
     button.textContent = 'Sign in';
     if (!result.ok) return showMessage('loginMessage', result.data.error || `Login failed (HTTP ${result.status})`);
     $('#loginForm').reset();
+    if (AUTH_NEXT && AUTH_NEXT.startsWith('/')) {
+      window.location.assign(AUTH_NEXT);
+      return;
+    }
     await routeUser(result.data.user);
   }
 
@@ -158,12 +189,16 @@
     button.textContent = 'Create account';
     if (!result.ok) return showMessage('signupMessage', result.data.error || `Registration failed (HTTP ${result.status})`);
     $('#signupForm').reset();
+    if (AUTH_NEXT && AUTH_NEXT.startsWith('/')) {
+      window.location.assign(AUTH_NEXT);
+      return;
+    }
     await routeUser(result.data.user);
   }
 
   function updateRecoveryMode() {
     const resetting = $('#recoveryMode').value === 'reset';
-    $('#recoveryFieldLabel').textContent = resetting ? 'Username' : 'Email';
+    $('#recoveryFieldLabel').textContent = resetting ? 'Username or email' : 'Email';
     $('#recoveryField').type = resetting ? 'text' : 'email';
     $('#recoveryField').value = '';
     showMessage('forgotMessage', '');
@@ -173,11 +208,13 @@
     event.preventDefault();
     const resetting = $('#recoveryMode').value === 'reset';
     const value = $('#recoveryField').value.trim();
-    if (!value) return showMessage('forgotMessage', resetting ? 'Enter your username.' : 'Enter your email.');
+    if (!value) return showMessage('forgotMessage', resetting ? 'Enter your username or email.' : 'Enter your email.');
     const button = $('#forgotSubmitBtn');
     button.disabled = true;
     button.textContent = 'Submitting...';
-    const result = await IAM.forgotPassword(resetting ? { username: value } : { email: value });
+    const payload = resetting ? { username: value } : { email: value };
+    if (recoveryReturnTo) payload.returnTo = recoveryReturnTo;
+    const result = await IAM.forgotPassword(payload);
     button.disabled = false;
     button.textContent = 'Continue';
     if (!result.ok) return showMessage('forgotMessage', result.data.error || `Request failed (HTTP ${result.status})`);
@@ -205,6 +242,10 @@
     button.textContent = 'Reset password';
     if (!result.ok) return showMessage('resetMessage', result.data.error || `Reset failed (HTTP ${result.status})`);
     $('#resetForm').reset();
+    if (recoveryReturnTo) {
+      window.location.assign(recoveryReturnTo);
+      return;
+    }
     showAuthScreen('login', 'Password updated. Sign in with your new password.');
   }
 
@@ -258,16 +299,19 @@
   }
 
   function setView(view) {
+    if (view === 'settings' && !(state.me?.roles || []).includes('admin')) view = 'profile';
     const titles = {
-      overview: 'Overview', users: 'Users', applications: 'Applications', authorization: 'Scopes & roles',
-      oauth: 'OAuth clients', delegations: 'Delegations', audit: 'Audit log', profile: 'Profile', password: 'Password',
+      overview: 'Overview', users: 'Users', applications: 'Applications', scopes: 'Scopes', roles: 'Roles',
+      oauth: 'OAuth clients', delegations: 'Delegations', audit: 'Audit log', settings: 'Settings', profile: 'Profile', password: 'Password',
     };
     state.view = view;
     $('#pageTitle').textContent = titles[view] || 'Overview';
-    document.title = ['profile', 'password'].includes(view) ? `IAM - ${titles[view]}` : 'IAM Console';
+    const brand = IAM_UI_SETTINGS?.brandName || 'IAM';
+    document.title = ['profile', 'password'].includes(view) ? `${brand} - ${titles[view]}` : `${brand} Console`;
     $$('.console-nav-item').forEach((item) => item.classList.toggle('active', item.dataset.view === view));
     $$('.console-view').forEach((panel) => panel.classList.toggle('active', panel.dataset.viewPanel === view));
-    if (view === 'authorization') loadAuthorization().catch((error) => showToast(error.message, 'err'));
+    if (['scopes', 'roles'].includes(view)) loadAuthorization().catch((error) => showToast(error.message, 'err'));
+    if (view === 'settings') loadSettings().catch((error) => showToast(error.message, 'err'));
     if (view === 'delegations') loadDelegations().catch((error) => showToast(error.message, 'err'));
   }
 
@@ -330,17 +374,61 @@
 
   function renderAuthorization() {
     const app = state.clients.find((client) => client.client_id === state.selectedClientId);
-    $('#authorizationAppSelect').innerHTML = state.clients.map((client) => `<option value="${esc(client.client_id)}" ${client.client_id === state.selectedClientId ? 'selected' : ''}>${esc(client.name)} · ${esc(client.client_id)}</option>`).join('');
+    const appOptions = state.clients.map((client) => `<option value="${esc(client.client_id)}" ${client.client_id === state.selectedClientId ? 'selected' : ''}>${esc(client.name)} · ${esc(client.client_id)}</option>`).join('');
+    $('#scopesAppSelect').innerHTML = appOptions;
+    $('#rolesAppSelect').innerHTML = appOptions;
     if (!app) {
       $('#permissionsList').innerHTML = '<div class="empty-state">Register an application to manage scopes.</div>';
       $('#rolesList').innerHTML = '';
       return;
     }
     $('#permissionsList').innerHTML = state.permissions.map((permission) => `
-      <div class="stack-row"><div><strong>${esc(permission.name)}</strong><small>${esc(permission.description || 'No description')}</small></div><button class="icon-danger" data-action="delete-permission" data-id="${esc(permission.id)}" title="Delete scope">×</button></div>`).join('') || '<div class="empty-state">No permission scopes registered.</div>';
+      <div class="stack-row"><div><strong>${esc(permission.name)}</strong><small>${esc(permission.description || 'No description')}</small></div><button class="row-action" data-action="edit-permission" data-id="${esc(permission.id)}">Edit</button><button class="icon-danger" data-action="delete-permission" data-id="${esc(permission.id)}" title="Delete scope">×</button></div>`).join('') || '<div class="empty-state">No permission scopes registered.</div>';
     $('#rolesList').innerHTML = state.appRoles.map((role) => `
-      <div class="stack-row role-row"><div><strong>${esc(role.name)}</strong><small>${esc(role.description || 'No description')}</small></div><button class="row-action" data-action="edit-role" data-id="${esc(role.id)}">Manage scopes</button><button class="icon-danger" data-action="delete-role" data-id="${esc(role.id)}" title="Delete role">×</button></div>`).join('') || '<div class="empty-state">No application roles registered.</div>';
+      <div class="stack-row role-row"><div><strong>${esc(role.name)}</strong><small>${esc(role.description || 'No description')}</small></div><button class="row-action" data-action="edit-role-definition" data-id="${esc(role.id)}">Edit</button><button class="row-action" data-action="edit-role" data-id="${esc(role.id)}">Manage scopes</button><button class="icon-danger" data-action="delete-role" data-id="${esc(role.id)}" title="Delete role">×</button></div>`).join('') || '<div class="empty-state">No application roles registered.</div>';
     renderRoleEditor();
+  }
+
+  function renderSettings() {
+    const appOptions = state.clients.map((client) => `<option value="${esc(client.client_id)}" ${client.client_id === state.selectedClientId ? 'selected' : ''}>${esc(client.name)} · ${esc(client.client_id)}</option>`).join('');
+    $('#settingsAppSelect').innerHTML = appOptions;
+    const settings = state.uiSettings || IAM_UI_SETTINGS || {};
+    $('#settingsPageTitle').value = settings.pageTitle || '';
+    $('#settingsBrandName').value = settings.brandName || '';
+    $('#settingsLogoText').value = settings.logoText || '';
+    $('#settingsSubtitle').value = settings.subtitle || '';
+    $('#settingsAccentColor').value = settings.accentColor || '#6366f1';
+    $('#settingsAccentStrongColor').value = settings.accentStrongColor || '#4f46e5';
+    $('#settingsBackgroundColor').value = settings.backgroundColor || '#0b1020';
+    $('#settingsSurfaceColor').value = settings.surfaceColor || '#151b30';
+    $('#settingsTextColor').value = settings.textColor || '#eef2ff';
+    $('#settingsMutedTextColor').value = settings.mutedTextColor || '#9aa7c7';
+    const overrides = state.uiOverrides || {};
+    for (const [field, inputId, autoId] of [
+      ['inputBackgroundColor', 'settingsInputBackgroundColor', 'settingsInputBackgroundAuto'],
+      ['inputBorderColor', 'settingsInputBorderColor', 'settingsInputBorderAuto'],
+      ['inputTextColor', 'settingsInputTextColor', 'settingsInputTextAuto'],
+      ['buttonTextColor', 'settingsButtonTextColor', 'settingsButtonTextAuto'],
+      ['linkColor', 'settingsLinkColor', 'settingsLinkAuto'],
+      ['linkHoverColor', 'settingsLinkHoverColor', 'settingsLinkHoverAuto'],
+    ]) {
+      $(`#${inputId}`).value = settings[field] || '#000000';
+      $(`#${autoId}`).checked = !overrides[field];
+      $(`#${inputId}`).disabled = !overrides[field];
+    }
+    const selectedClient = state.clients.find((client) => client.client_id === state.selectedClientId);
+    if (selectedClient?.is_system && state.uiSettings) {
+      const applied = IAM.applyUiSettings(state.uiSettings);
+      document.title = `${applied.brandName} Console`;
+    }
+  }
+
+  async function loadSettings() {
+    if (!state.selectedClientId) return renderSettings();
+    const result = await api('GET', `/clients/${routeId(state.selectedClientId)}/ui-settings`);
+    state.uiSettings = result.settings;
+    state.uiOverrides = result.overrides || {};
+    renderSettings();
   }
 
   function renderRoleEditor() {
@@ -443,6 +531,28 @@
     openDialog('userDialog');
   }
 
+  function openPermissionEditor(permissionId = '') {
+    const permission = state.permissions.find((item) => item.id === permissionId);
+    $('#permissionDialogTitle').textContent = permission ? 'Edit permission scope' : 'Add permission scope';
+    $('#permissionSubmitButton').textContent = permission ? 'Save scope' : 'Add scope';
+    $('#permissionEditId').value = permission?.id || '';
+    $('#permissionName').value = permission?.name || '';
+    $('#permissionDescription').value = permission?.description || '';
+    showFormMessage('permissionFormMessage', '');
+    openDialog('permissionDialog');
+  }
+
+  function openRoleDefinitionEditor(roleId = '') {
+    const role = state.appRoles.find((item) => item.id === roleId);
+    $('#roleDialogTitle').textContent = role ? 'Edit role bundle' : 'Add role bundle';
+    $('#roleSubmitButton').textContent = role ? 'Save role' : 'Add role';
+    $('#roleEditId').value = role?.id || '';
+    $('#roleName').value = role?.name || '';
+    $('#roleDescription').value = role?.description || '';
+    showFormMessage('roleFormMessage', '');
+    openDialog('roleDialog');
+  }
+
   function showCredential(secret) {
     $('#credentialValue').textContent = secret;
     $('#credentialDialog').hidden = false;
@@ -458,6 +568,7 @@
     state.audit = audit.events || [];
     if (!state.selectedClientId || !state.clients.some((client) => client.client_id === state.selectedClientId)) state.selectedClientId = state.clients[0]?.client_id || '';
     renderOverview(); renderUsers(); renderApplications(); renderAuthorization(); renderAudit();
+    renderSettings();
     if (state.view === 'delegations') await loadDelegations();
   }
 
@@ -490,14 +601,53 @@
 
   async function submitPermission(event) {
     event.preventDefault();
-    try { await api('POST', `/clients/${routeId(state.selectedClientId)}/permissions`, { name: $('#permissionName').value.trim(), description: $('#permissionDescription').value.trim() }); closeDialogs(); await loadAuthorization(); await loadData(); showToast('Permission scope added'); }
+    const editId = $('#permissionEditId').value;
+    const payload = { name: $('#permissionName').value.trim(), description: $('#permissionDescription').value.trim() };
+    try { await api(editId ? 'PUT' : 'POST', editId ? `/clients/${routeId(state.selectedClientId)}/permissions/${routeId(editId)}` : `/clients/${routeId(state.selectedClientId)}/permissions`, payload); closeDialogs(); await loadAuthorization(); await loadData(); showToast(editId ? 'Permission scope updated' : 'Permission scope added'); }
     catch (error) { showFormMessage('permissionFormMessage', error.message); }
   }
 
   async function submitRole(event) {
     event.preventDefault();
-    try { await api('POST', `/clients/${routeId(state.selectedClientId)}/roles`, { name: $('#roleName').value.trim(), description: $('#roleDescription').value.trim() }); closeDialogs(); await loadAuthorization(); await loadData(); showToast('Role added'); }
+    const editId = $('#roleEditId').value;
+    const payload = { name: $('#roleName').value.trim(), description: $('#roleDescription').value.trim() };
+    try { await api(editId ? 'PUT' : 'POST', editId ? `/clients/${routeId(state.selectedClientId)}/roles/${routeId(editId)}` : `/clients/${routeId(state.selectedClientId)}/roles`, payload); closeDialogs(); await loadAuthorization(); await loadData(); showToast(editId ? 'Role updated' : 'Role added'); }
     catch (error) { showFormMessage('roleFormMessage', error.message); }
+  }
+
+  async function submitSettings(event) {
+    event.preventDefault();
+    if (!state.selectedClientId) return showFormMessage('settingsFormMessage', 'Register an application before configuring its theme.');
+    const settings = {
+      pageTitle: $('#settingsPageTitle').value.trim(),
+      brandName: $('#settingsBrandName').value.trim(),
+      logoText: $('#settingsLogoText').value.trim(),
+      subtitle: $('#settingsSubtitle').value.trim(),
+      accentColor: $('#settingsAccentColor').value,
+      accentStrongColor: $('#settingsAccentStrongColor').value,
+      backgroundColor: $('#settingsBackgroundColor').value,
+      surfaceColor: $('#settingsSurfaceColor').value,
+      textColor: $('#settingsTextColor').value,
+      mutedTextColor: $('#settingsMutedTextColor').value,
+    };
+    for (const [field, inputId, autoId] of [
+      ['inputBackgroundColor', 'settingsInputBackgroundColor', 'settingsInputBackgroundAuto'],
+      ['inputBorderColor', 'settingsInputBorderColor', 'settingsInputBorderAuto'],
+      ['inputTextColor', 'settingsInputTextColor', 'settingsInputTextAuto'],
+      ['buttonTextColor', 'settingsButtonTextColor', 'settingsButtonTextAuto'],
+      ['linkColor', 'settingsLinkColor', 'settingsLinkAuto'],
+      ['linkHoverColor', 'settingsLinkHoverColor', 'settingsLinkHoverAuto'],
+    ]) {
+      settings[field] = $(`#${autoId}`).checked ? null : $(`#${inputId}`).value;
+    }
+    try {
+      const result = await api('PUT', `/clients/${routeId(state.selectedClientId)}/ui-settings`, settings);
+      state.uiSettings = result.settings;
+      state.uiOverrides = result.overrides || {};
+      renderSettings();
+      showFormMessage('settingsFormMessage', 'Application theme saved.', 'ok');
+      showToast('Application theme saved');
+    } catch (error) { showFormMessage('settingsFormMessage', error.message); }
   }
 
   async function saveRole() {
@@ -523,11 +673,21 @@
     if (action === 'open-console') return showAdmin().catch((error) => showToast(error.message, 'err'));
     if (action === 'open-app-create') return openAppEditor();
     if (action === 'edit-app') return openAppEditor(id);
-    if (action === 'manage-app') { state.selectedClientId = id; setView('authorization'); return; }
+    if (action === 'manage-app') { state.selectedClientId = id; setView('scopes'); return; }
     if (action === 'open-user-create') return openUserEditor();
     if (action === 'edit-user') return openUserEditor(id);
-    if (action === 'open-permission-create') return openDialog('permissionDialog');
-    if (action === 'open-role-create') return openDialog('roleDialog');
+    if (action === 'open-permission-create') return openPermissionEditor();
+    if (action === 'edit-permission') return openPermissionEditor(id);
+    if (action === 'open-role-create') return openRoleDefinitionEditor();
+    if (action === 'edit-role-definition') return openRoleDefinitionEditor(id);
+    if (action === 'reset-settings') {
+      const selectedClient = state.clients.find((client) => client.client_id === state.selectedClientId);
+      if (!selectedClient) return showToast('Select an application first.', 'err');
+      if (!window.confirm(`Reset the ${selectedClient.name} theme to the IAM defaults?`)) return;
+      try { await api('DELETE', `/clients/${routeId(state.selectedClientId)}/ui-settings`); await loadSettings(); showToast('Application theme reset'); }
+      catch (error) { showToast(error.message, 'err'); }
+      return;
+    }
     if (action === 'close-dialog') return closeDialogs();
     if (action === 'close-role-editor') { state.roleDetail = null; return renderRoleEditor(); }
     if (action === 'save-role') return saveRole();
@@ -586,18 +746,35 @@
   $('#globalSearch').addEventListener('input', (event) => { state.query = event.target.value.trim(); renderUsers(); renderApplications(); });
   $('#userSearch').addEventListener('input', renderUsers);
   $('#userStatusFilter').addEventListener('change', renderUsers);
-  $('#authorizationAppSelect').addEventListener('change', (event) => { state.selectedClientId = event.target.value; loadAuthorization().catch((error) => showToast(error.message, 'err')); });
+  $('#scopesAppSelect').addEventListener('change', (event) => { state.selectedClientId = event.target.value; $('#rolesAppSelect').value = event.target.value; loadAuthorization().catch((error) => showToast(error.message, 'err')); });
+  $('#rolesAppSelect').addEventListener('change', (event) => { state.selectedClientId = event.target.value; $('#scopesAppSelect').value = event.target.value; loadAuthorization().catch((error) => showToast(error.message, 'err')); });
+  $('#settingsAppSelect').addEventListener('change', (event) => { state.selectedClientId = event.target.value; loadSettings().catch((error) => showToast(error.message, 'err')); });
   $('#delegationSource').addEventListener('change', () => { populateDelegationApps(); loadDelegations().catch((error) => showToast(error.message, 'err')); });
   $('#delegationTarget').addEventListener('change', renderDelegationScopes);
   $('#appForm').addEventListener('submit', submitApp);
   $('#userForm').addEventListener('submit', submitUser);
   $('#permissionForm').addEventListener('submit', submitPermission);
   $('#roleForm').addEventListener('submit', submitRole);
+  $('#settingsForm').addEventListener('submit', submitSettings);
+  $$('[data-settings-auto-for]').forEach((checkbox) => checkbox.addEventListener('change', () => {
+    const input = $(`#${checkbox.dataset.settingsAutoFor}`);
+    if (input) input.disabled = checkbox.checked;
+  }));
   $('#delegationForm').addEventListener('submit', submitDelegation);
   $('#copyCredential').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('#credentialValue').textContent); showToast('Secret copied to clipboard'); } catch { showToast('Copy failed; select the secret manually', 'err'); } });
 
   (async function init() {
     try {
+      await IAM.uiReady;
+      const recoveryParams = new URLSearchParams(location.search);
+      const recoveryToken = recoveryParams.get('token') || recoveryParams.get('reset_token');
+      const recoveryUsername = recoveryParams.get('username');
+      recoveryReturnTo = safeRecoveryReturnTo(recoveryParams.get('next')) || recoveryReturnTo;
+      if (recoveryToken && recoveryUsername) {
+        $('#resetUsername').value = recoveryUsername;
+        $('#resetToken').value = recoveryToken;
+        return showAuthScreen('reset', 'Use the emailed link to choose a new password.');
+      }
       state.me = await IAM.me();
       if (!state.me) return showAuthScreen('login');
       await routeUser(state.me);

@@ -1,0 +1,6 @@
+node_modules
+iam.db*
+iam.oidc.key
+.vaults
+*.log
+.DS_Store

@@ -4,19 +4,59 @@
       "clientId": "mainsite",
       "name": "Main Site",
       "description": "Adventure aggregation and account-facing application",
-      "clientType": "confidential",
+      "clientType": "public",
       "grantTypes": [
         "authorization_code",
-        "refresh_token",
-        "urn:ietf:params:oauth:grant-type:token-exchange"
+        "refresh_token"
+      ],
+      "redirectUris": ["http://localhost:8080/login.html"],
+      "allowedScopes": [
+        "mainsite:profile:read",
+        "mainsite:profile:update",
+        "mainsite:users:manage",
+        "mainsite:roles:manage"
+      ],
+      "defaultRole": "member",
+      "authorizationManifestFile": "/app/config/mainsite-authorization-manifest.json",
+      "initialRoleAssignments": [
+        { "username": "admin", "roles": ["admin"] }
       ]
     },
     {
       "clientId": "blogs-api",
       "name": "Blogs API",
       "description": "Adventure blogs resource server",
-      "clientType": "service",
-      "grantTypes": ["client_credentials"]
+      "clientType": "confidential",
+      "grantTypes": ["authorization_code", "refresh_token", "client_credentials"],
+      "redirectUris": ["http://localhost:8080/blog/api/auth/callback"],
+      "initialRoleAssignments": [
+        { "username": "admin", "roles": ["admin"] }
+      ]
+    },
+    {
+      "clientId": "sitemaster-api",
+      "name": "Adventure Sitemaster",
+      "description": "Generic multi-site content management API",
+      "clientType": "confidential",
+      "grantTypes": ["authorization_code", "refresh_token", "client_credentials"],
+      "redirectUris": ["http://localhost:5001/admin/callback", "http://localhost:8080/sitemaster/admin/callback"],
+      "allowedScopes": [
+        "sitemaster:site:read",
+        "sitemaster:site:manage",
+        "sitemaster:page:read",
+        "sitemaster:page:create",
+        "sitemaster:page:update",
+        "sitemaster:page:delete",
+        "sitemaster:content:read",
+        "sitemaster:content:manage",
+        "sitemaster:deploy",
+        "sitemaster:publish"
+      ],
+      "defaultRole": "viewer",
+      "authorizationManifestFile": "/app/config/sitemaster-authorization-manifest.json",
+      "initialRoleAssignments": [
+        { "username": "admin", "roles": ["admin"] }
+      ]
     }
   ]
 }

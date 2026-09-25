@@ -15,9 +15,28 @@ IAM_OAUTH_REQUIRE_PKCE=true
 IAM_METRICS_ENABLED=false
 IAM_APPLICATIONS_CONFIG=/absolute/path/applications.json
 IAM_VAULTS_FILE=/absolute/path/.vaults
+IAM_DEV_MODE=false
+IAM_ADMIN_EMAIL=admin@example.com
+IAM_MAIL_FROM=no-reply@example.com
+IAM_PUBLIC_BASE_URL=https://iam.example.com
+IAM_SMTP_HOST=smtp.example.com
+IAM_SMTP_PORT=587
+IAM_SMTP_SECURE=true
+IAM_SMTP_USERNAME=<smtp username>
+IAM_SMTP_PASSWORD=<smtp password>
 ```
 
 In development, IAM creates a local `iam.oidc.key` if no key file or `IAM_OIDC_PRIVATE_KEY_PEM` is configured. Production must provide a protected key file or private key and must back it up separately from the database.
+
+## Password recovery
+
+Password recovery must use a verified email, SMS, or enrolled MFA recovery
+channel. In this repository, SMTP email delivery is supported. Configure the
+SMTP variables above and set `IAM_PUBLIC_BASE_URL` to the URL users can reach;
+IAM then sends a single-use, time-limited reset link and does not return the
+token to the caller. `IAM_DEV_MODE=true` exposes a one-time token for
+disposable local testing only; never enable it in a shared or production
+environment.
 
 ## Recommended user integration
 
@@ -51,6 +70,13 @@ The default bootstrap file registers `mainsite` and `blogs-api`. `blogs-api` is 
 audience used by the token-exchange flow; the application is named Blogs in the configuration.
 `.vaults` is ignored by Git and is written with mode `0600`. It must still be protected by the host
 and deployment system.
+
+An application may also declare `defaultRole` in `applications.json` (for example,
+`"defaultRole": "member"` for Mainsite). After the application’s authorization manifest has been
+reconciled, IAM assigns that role on the user’s first authorization for the application when no
+role is assigned for that application/context. Existing application roles are never replaced.
+This is JIT provisioning of an app membership; it does not make the application’s roles or
+permissions global IAM roles.
 
 ## Application authorization
 

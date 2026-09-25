@@ -277,6 +277,17 @@ sequenceDiagram
 
 The first user sign-in should support just-in-time application provisioning: create or link the application’s membership using the stable IAM subject. If centralized lifecycle provisioning is required, add SCIM or an event/webhook contract later. Do not make an application infer account identity from mutable username or email values.
 
+The current compatibility implementation exposes this policy as an application
+`defaultRole`. For example, the Mainsite registration declares `defaultRole:
+"member"` alongside its application-owned authorization manifest. When an IAM
+principal first authorizes Mainsite, IAM assigns that role only if the
+principal has no Mainsite role in the requested context. Existing app-specific
+assignments are preserved, and the resulting audience-bound token contains the
+Mainsite roles, permissions, and granted application scopes. This is a
+transitional implementation of JIT membership provisioning; it should evolve
+to the full membership/provisioning modes below without moving application RBAC
+definitions into IAM.
+
 #### Application user registration and membership
 
 Application registration is distinct from user registration. Registering `mainsite` creates an IAM application tenant and one or more OAuth clients; it does not make every IAM principal a `mainsite` user. When `mainsite` registers a user, IAM creates or links a central principal and then creates a `mainsite` membership. The same principal can separately have a `blogs` membership.
